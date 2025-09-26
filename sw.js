@@ -1,4 +1,4 @@
-const CACHE_NAME = 'qrscanner-v1';
+const CACHE_NAME = 'qrscanner-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -21,9 +21,9 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (url.origin === location.origin) {
+  if (url.origin === location.origin && e.request.method === 'GET') {
     e.respondWith(
-      caches.match(e.request).then((res) => res || fetch(e.request))
+      fetch(e.request).catch(() => caches.match(e.request))
     );
   }
 });
