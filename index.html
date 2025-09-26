@@ -30,6 +30,14 @@
   </header>
 
   <main>
+    <section class="card" id="diag">
+      <h3 style="margin:0 0 8px">環境チェック</h3>
+      <div class="row" style="gap:12px">
+        <button id="btnCheck">環境を診断</button>
+        <span class="muted">HTTPS / 権限 / デバイス検出状況を表示します</span>
+      </div>
+      <pre id="diagOut" style="white-space:pre-wrap;background:#0b1020;border:1px solid #374151;border-radius:8px;padding:8px;margin-top:8px;max-height:200px;overflow:auto"></pre>
+    </section>
     <section class="card">
       <div class="row">
         <button id="btnStart">読み取り開始</button>
@@ -41,6 +49,7 @@
       <div class="row">
         <label>カメラ: <select id="cameraSelect"></select></label>
         <label><input type="checkbox" id="chkTorch"/> トーチ（対応端末）</label>
+        <button id="btnGrant">権限リクエスト</button>
       </div>
     </section>
 
@@ -80,8 +89,8 @@
     </section>
   </main>
 
-  <!-- html5-qrcode（CDN）。オフライン運用したい場合は libs/ 配下に同梱し、パスを相対に変更してください。 -->
-  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.10/html5-qrcode.min.js" integrity="sha384-z3yZt3m9qXHc7e3e2mTnqJf7o3Vq4pYH6z4M6v5gQ0hQm7o3lH3x9qkQe2y1v9rR" crossorigin="anonymous"></script>
+  <!-- html5-qrcode をローカル同梱に変更（企業ネットワークで CDN がブロックされる対策） -->
+  <script src="./libs/html5-qrcode.min.js"></script>
 
   <script>
     // --- PWA バッジ ---
@@ -157,13 +166,29 @@
     let isRunning = false;
 
     async function listCameras() {
-      const devices = await Html5Qrcode.getCameras();
-      els.cameraSelect.innerHTML = '';
-      devices.forEach(d => {
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        els.cameraSelect.innerHTML = '';
+        if (!devices || devices.length === 0) {
+          const opt = document.createElement('option');
+          opt.value = '';
+          opt.textContent = '（検出なし：権限付与後に再実行）';
+          els.cameraSelect.appendChild(opt);
+          return;
+        }
+        devices.forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.id; opt.textContent = d.label || d.id;
+          els.cameraSelect.appendChild(opt);
+        });
+      } catch (e) {
+        els.cameraSelect.innerHTML = '';
         const opt = document.createElement('option');
-        opt.value = d.id; opt.textContent = d.label || d.id;
+        opt.value = '';
+        opt.textContent = '（列挙失敗：権限/HTTPS/ブラウザ確認）';
         els.cameraSelect.appendChild(opt);
-      });
+      }
+    });
     }
 
     async function start() {
@@ -193,6 +218,47 @@
     }
     function onScanFailure(err) {
       // 失敗は無視して連続
+    }
+
+    // --- 環境診断 ---
+    async function diagnose() {
+      const lines = [];
+      const isHttps = location.protocol === 'https:' || location.hostname === 'localhost';
+      lines.push(`URL: ${location.href}`);
+      lines.push(`HTTPS/localhost: ${isHttps ? 'OK' : 'NG (HTTPS で開いてください)'}`);
+      // Permissions API
+      if (navigator.permissions && navigator.permissions.query) {
+        try {
+          const st = await navigator.permissions.query({ name: 'camera' });
+          lines.push(`Permissions.camera: ${st.state}`);
+        } catch (e) { lines.push(`Permissions.camera: 不明 (${e})`); }
+      } else {
+        lines.push('Permissions API: 未対応');
+      }
+      // getUserMedia トライ
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        lines.push('getUserMedia: 未対応 (ブラウザを更新/Chrome推奨)');
+      } else {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          stream.getTracks().forEach(t => t.stop());
+          lines.push('getUserMedia: OK (アクセス可能)');
+        } catch (e) {
+          lines.push(`getUserMedia: 失敗 -> ${e.name}: ${e.message}`);
+          if (e.name === 'NotAllowedError') lines.push('→ ブラウザのカメラ権限を許可してください。サイトの設定を確認。');
+          if (e.name === 'NotFoundError') lines.push('→ カメラが見つかりません。デバイスやドライバ、他アプリの専有を確認。');
+          if (e.name === 'NotReadableError') lines.push('→ 別アプリがカメラを使用中の可能性。アプリを閉じて再試行。');
+          if (e.name === 'SecurityError' && !isHttps) lines.push('→ HTTPS でないとブロックされます。');
+        }
+      }
+      // カメラ列挙
+      try {
+        const cams = await Html5Qrcode.getCameras();
+        lines.push(`カメラ検出: ${cams.length} 台`);
+        cams.forEach((c,i)=> lines.push(`  [${i}] ${c.label || c.id}`));
+      } catch (e) { lines.push(`カメラ列挙失敗: ${e}`); }
+      document.getElementById('diagOut').textContent = lines.join('
+');
     }
 
     // トーチ切替（対応デバイスのみ）
@@ -232,9 +298,20 @@
     });
 
     // --- UI ワイヤリング ---
+    document.getElementById('btnCheck').addEventListener('click', diagnose);
     document.getElementById('btnStart').addEventListener('click', start);
     document.getElementById('btnStop').addEventListener('click', stop);
     document.getElementById('btnReset').addEventListener('click', () => { resetSession(); });
+    document.getElementById('btnGrant').addEventListener('click', async () => {
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({ video: true });
+        s.getTracks().forEach(t=>t.stop());
+        await listCameras();
+        alert('カメラ権限が許可されました。（必要ならデバイスを選んで開始）');
+      } catch (e) {
+        alert('権限取得に失敗: ' + e.message);
+      }
+    });
 
     // 初期化
     resetSession();
