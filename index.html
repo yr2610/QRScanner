@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QR Log Scanner (PWA)</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <meta name="theme-color" content="#111827" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, \"Noto Sans JP\", sans-serif; margin: 0; background:#0b1020; color:#e5e7eb; }
+    header { padding: 12px 16px; border-bottom: 1px solid #1f2937; display:flex; align-items:center; gap:12px; }
+    h1 { font-size: 18px; margin: 0; }
+    main { padding: 16px; display:grid; gap:16px; max-width: 960px; margin: 0 auto; }
+    .card { background:#0f172a; border:1px solid #1f2937; border-radius: 12px; padding: 16px; }
+    .row { display:flex; flex-wrap: wrap; gap:12px; align-items:center; }
+    button, select { background:#111827; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:8px 12px; cursor:pointer; }
+    button:hover { background:#1f2937; }
+    .muted { color:#9ca3af; font-size: 12px; }
+    #reader { width: 100%; max-width: 640px; margin: 0 auto; }
+    textarea { width:100%; height: 200px; resize: vertical; background:#0b1020; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:8px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#111827; border:1px solid #374151; font-size:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>QR Log Scanner</h1>
+    <span class="pill" id="pwaStatus">PWA</span>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="row">
+        <button id="btnStart">読み取り開始</button>
+        <button id="btnStop" disabled>停止</button>
+        <button id="btnReset">セッション初期化</button>
+        <span class="muted">カメラ権限が必要です（HTTPS/localhostのみ動作）</span>
+      </div>
+      <div id="reader" class="card" style="aspect-ratio:4/3;"></div>
+      <div class="row">
+        <label>カメラ: <select id="cameraSelect"></select></label>
+        <label><input type="checkbox" id="chkTorch"/> トーチ（対応端末）</label>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="grid">
+        <div>
+          <h3 style="margin:0 0 8px">進捗</h3>
+          <div class="row" style="gap:16px">
+            <div>セッション: <code id="sessionId">(未検出)</code></div>
+            <div>受信: <span id="progress">0/0</span></div>
+            <div>不足: <span id="missing">-</span></div>
+          </div>
+          <p class="muted" style="margin-top:8px">※ QRペイロードの想定フォーマット: <code>[idx/total]|session|payload</code></p>
+        </div>
+        <div>
+          <h3 style="margin:0 0 8px">受信ログ（結合プレビュー）</h3>
+          <textarea id="preview" placeholder="受信済みのチャンクを連結した内容を表示します"></textarea>
+          <div class="row" style="justify-content:flex-end">
+            <button id="btnSaveTxt">.txt として保存</button>
+            <button id="btnShareTxt">共有（Gmail/Drive など）</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <details>
+        <summary>このツールについて（クリックで開く）</summary>
+        <p>PC で分割表示した QR（各枚に <code>[idx/total]|session|payload</code> を含む）を、スマホ等で連続スキャンして結合するための PWA です。payload は<strong>テキスト（推奨は base64 など ASCII セーフ）</strong>を想定。</p>
+        <ul>
+          <li>重複受信は自動スキップ</li>
+          <li>欠番をリアルタイム表示</li>
+          <li>全受信済みなら順序通りに連結</li>
+          <li>「共有」ボタンで OS の共有シートを開き、Gmail/Google Drive などにファイルとして渡せます</li>
+        </ul>
+      </details>
+    </section>
+  </main>
+
+  <!-- html5-qrcode（CDN）。オフライン運用したい場合は libs/ 配下に同梱し、パスを相対に変更してください。 -->
+  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.10/html5-qrcode.min.js" integrity="sha384-z3yZt3m9qXHc7e3e2mTnqJf7o3Vq4pYH6z4M6v5gQ0hQm7o3lH3x9qkQe2y1v9rR" crossorigin="anonymous"></script>
+
+  <script>
+    // --- PWA バッジ ---
+    (async () => {
+      const el = document.getElementById('pwaStatus');
+      if (window.matchMedia('(display-mode: standalone)').matches) el.textContent = 'PWA ✓';
+      if ('serviceWorker' in navigator) {
+        try { await navigator.serviceWorker.register('./sw.js'); } catch (e) {}
+      }
+    })();
+
+    // --- 受信状態 ---
+    let currentSession = null;   // 文字列 sessionId
+    let total = 0;               // 受信総数
+    const chunks = new Map();    // idx:number -> payload:string
+
+    const els = {
+      session: document.getElementById('sessionId'),
+      progress: document.getElementById('progress'),
+      missing: document.getElementById('missing'),
+      preview: document.getElementById('preview'),
+      cameraSelect: document.getElementById('cameraSelect'),
+      chkTorch: document.getElementById('chkTorch'),
+    };
+
+    function resetSession() {
+      currentSession = null; total = 0; chunks.clear();
+      els.session.textContent = '(未検出)';
+      els.progress.textContent = '0/0';
+      els.missing.textContent = '-';
+      els.preview.value = '';
+    }
+
+    function updateProgress() {
+      const have = chunks.size;
+      els.progress.textContent = `${have}/${total}`;
+      const miss = [];
+      for (let i = 1; i <= total; i++) if (!chunks.has(i)) miss.push(i);
+      els.missing.textContent = total ? (miss.length ? miss.join(',') : 'なし') : '-';
+      if (total && have === total) {
+        // 連結してプレビュー
+        let out = '';
+        for (let i = 1; i <= total; i++) out += chunks.get(i) || '';
+        els.preview.value = out;
+      }
+    }
+
+    function ingestPayload(text) {
+      // 期待形式: "[idx/total]|session|payload"
+      const m = text.match(/^\[(\d+)\/(\d+)\]\|(.*?)\|(.*)$/s);
+      if (!m) return; // フォーマット外は無視
+      const idx = Number(m[1]);
+      const tot = Number(m[2]);
+      const ses = m[3];
+      const payload = m[4];
+
+      if (!currentSession) {
+        currentSession = ses;
+        total = tot;
+        els.session.textContent = currentSession;
+      }
+      if (ses !== currentSession) return; // 異なるセッションは無視
+      if (tot !== total) return;           // 総数が異なる場合も無視
+
+      if (!chunks.has(idx)) {
+        chunks.set(idx, payload);
+        updateProgress();
+      }
+    }
+
+    // --- カメラ / スキャン ---
+    const html5Qr = new Html5Qrcode(/* element id */ 'reader');
+    let isRunning = false;
+
+    async function listCameras() {
+      const devices = await Html5Qrcode.getCameras();
+      els.cameraSelect.innerHTML = '';
+      devices.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.id; opt.textContent = d.label || d.id;
+        els.cameraSelect.appendChild(opt);
+      });
+    }
+
+    async function start() {
+      if (isRunning) return;
+      const camId = els.cameraSelect.value || undefined;
+      await html5Qr.start(
+        camId ? { deviceId: { exact: camId } } : { facingMode: 'environment' },
+        { fps: 15, qrbox: { width: 480, height: 360 } },
+        onScan,
+        onScanFailure
+      );
+      isRunning = true;
+      document.getElementById('btnStart').disabled = true;
+      document.getElementById('btnStop').disabled = false;
+    }
+
+    async function stop() {
+      if (!isRunning) return;
+      await html5Qr.stop();
+      isRunning = false;
+      document.getElementById('btnStart').disabled = false;
+      document.getElementById('btnStop').disabled = true;
+    }
+
+    function onScan(decodedText) {
+      ingestPayload(decodedText.trim());
+    }
+    function onScanFailure(err) {
+      // 失敗は無視して連続
+    }
+
+    // トーチ切替（対応デバイスのみ）
+    els.chkTorch.addEventListener('change', async () => {
+      try { await html5Qr.applyVideoConstraints({ advanced: [{ torch: els.chkTorch.checked }] }); } catch {}
+    });
+
+    // --- 保存 / 共有 ---
+    function getResultBlob() {
+      const text = els.preview.value || '';
+      return new Blob([text], { type: 'text/plain' });
+    }
+
+    document.getElementById('btnSaveTxt').addEventListener('click', () => {
+      const blob = getResultBlob();
+      const a = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      a.download = `qrlog-${currentSession || 'session'}-${ts}.txt`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+
+    document.getElementById('btnShareTxt').addEventListener('click', async () => {
+      const blob = getResultBlob();
+      const file = new File([blob], `qrlog-${currentSession || 'session'}.txt`, { type: 'text/plain' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: 'QR Log', text: '連結ログ' }); } catch {}
+      } else {
+        // 共有未対応環境は保存にフォールバック
+        const a = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        a.href = url; a.download = file.name; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    });
+
+    // --- UI ワイヤリング ---
+    document.getElementById('btnStart').addEventListener('click', start);
+    document.getElementById('btnStop').addEventListener('click', stop);
+    document.getElementById('btnReset').addEventListener('click', () => { resetSession(); });
+
+    // 初期化
+    resetSession();
+    listCameras();
+  </script>
+</body>
+</html>
