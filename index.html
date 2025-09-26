@@ -28,8 +28,17 @@
     <h1>QR Log Scanner</h1>
     <span class="pill" id="pwaStatus">PWA</span>
   </header>
+<div id="banner" style="background:#3b82f6;color:#0b1020;padding:8px 16px;display:none"></div>
 
   <main>
+    <section class="card" id="quickTest">
+      <h3 style="margin:0 0 8px">クイックテスト（生カメラ）</h3>
+      <div class="row" style="gap:12px">
+        <button id="btnVideoTest">生カメラ開始</button>
+        <span class="muted">getUserMedia で直接 <video> に表示します（ライブラリ無関係の動作確認）。</span>
+      </div>
+      <video id="videoTest" autoplay playsinline style="width:100%;max-width:480px;border:1px solid #374151;border-radius:8px;margin-top:8px;display:none"></video>
+    </section>
     <section class="card" id="diag">
       <h3 style="margin:0 0 8px">環境チェック</h3>
       <div class="row" style="gap:12px">
@@ -89,10 +98,19 @@
     </section>
   </main>
 
-  <!-- html5-qrcode をローカル同梱に変更（企業ネットワークで CDN がブロックされる対策） -->
-  <script src="./libs/html5-qrcode.min.js"></script>
+    <!-- html5-qrcode をローカル同梱（無ければバナーで警告） -->
+  <script>
+    window.__libLoaded = false;
+  </script>
+  <script src="./libs/html5-qrcode.min.js" onload="window.__libLoaded=true" onerror="window.__libLoaded=false"></script>
 
   <script>
+    // --- バナー/ヘルプ ---
+    function setBanner(msg, color='#f43f5e') {
+      const b = document.getElementById('banner');
+      b.style.display='block'; b.style.background=color; b.textContent=msg;
+    }
+
     // --- PWA バッジ ---
     (async () => {
       const el = document.getElementById('pwaStatus');
@@ -312,10 +330,38 @@
         alert('権限取得に失敗: ' + e.message);
       }
     });
+    document.getElementById('btnCheck').addEventListener('click', diagnose);
+    document.getElementById('btnVideoTest').addEventListener('click', async () => {
+      try {
+        const v = document.getElementById('videoTest');
+        const s = await navigator.mediaDevices.getUserMedia({ video: true });
+        v.srcObject = s; v.style.display='block';
+      } catch(e) {
+        alert('生カメラ起動失敗: ' + e.name + ' / ' + e.message);
+      }
+    });
+
+    // 初期化
+    document.getElementById('btnGrant').addEventListener('click', async () => {
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({ video: true });
+        s.getTracks().forEach(t=>t.stop());
+        await listCameras();
+        alert('カメラ権限が許可されました。（必要ならデバイスを選んで開始）');
+      } catch (e) {
+        alert('権限取得に失敗: ' + e.message);
+      }
+    });
 
     // 初期化
     resetSession();
+    if (!window.__libLoaded) {
+      setBanner('html5-qrcode ライブラリが読み込めていません。/libs/html5-qrcode.min.js を配置したか確認してください。');
+    }
     listCameras();
+    if (!(location.protocol === 'https:' || location.hostname === 'localhost')) {
+      setBanner('このページは HTTPS で開いてください（GitHub Pages の https:// から）。');
+    }
   </script>
 </body>
 </html>
