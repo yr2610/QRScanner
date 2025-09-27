@@ -1,10 +1,9 @@
-const CACHE_NAME = 'qrscanner-v2';
+const CACHE_NAME = 'qrscanner-v3';
 const ASSETS = [
   './',
-  './index.html',
-  './manifest.webmanifest'
-  // オフラインで使いたいライブラリをローカル同梱した場合はここに追加
-  // 例: './libs/html5-qrcode.min.js'
+  './index.html?v=3',
+  './manifest.webmanifest?v=3'
+  // './libs/html5-qrcode.min.js?v=3'  // 置いた場合は必要に応じて追加
 ];
 
 self.addEventListener('install', (e) => {
@@ -21,9 +20,9 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (url.origin === location.origin && e.request.method === 'GET') {
+  if (url.origin === location.origin) {
     e.respondWith(
-      fetch(e.request).catch(() => caches.match(e.request))
+      caches.match(e.request).then((res) => res || fetch(e.request, { cache: 'no-store' }))
     );
   }
 });
