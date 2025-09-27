@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>QR Log Scanner (PWA)</title>
+  <title>QR Log Scanner</title>
   <link rel="manifest" href="./manifest.webmanifest?v=3" />
   <meta name="theme-color" content="#111827" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -20,12 +20,11 @@
     button[disabled]{opacity:.5; cursor:not-allowed;}
     button:hover { background:#1f2937; }
     .muted { color:#9ca3af; font-size:12px; }
-    #reader { width:100%; max-width:640px; margin:0 auto; }
+    #reader { width:100%; max-width:640px; margin:0 auto; aspect-ratio:4/3; }
     textarea { width:100%; height:200px; resize:vertical; background:#0b1020; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:8px; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
     @media (max-width:720px){ .grid{ grid-template-columns:1fr; } }
     .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#111827; border:1px solid #374151; font-size:12px; }
-    pre { white-space:pre-wrap; }
   </style>
 </head>
 <body>
@@ -33,33 +32,20 @@
     <h1>QR Log Scanner</h1>
     <span class="pill" id="pwaStatus">PWA</span>
   </header>
-  <div id="banner" style="background:#f43f5e;color:#0b1020;padding:8px 16px;display:none"></div>
 
   <main>
-    <section class="card" id="quickTest">
-      <h3 style="margin:0 0 8px">クイックテスト（生カメラ）</h3>
-      <div class="row" style="gap:12px">
-        <button id="btnVideoTest">生カメラ開始</button>
-        <span class="muted">getUserMedia で直接 &lt;video&gt; に表示（ライブラリ無関係の動作確認）。</span>
-      </div>
-      <video id="videoTest" autoplay playsinline style="width:100%;max-width:480px;border:1px solid #374151;border-radius:8px;margin-top:8px;display:none"></video>
-    </section>
-
     <section class="card">
       <div class="row">
         <button id="btnStart" disabled>読み取り開始</button>
         <button id="btnStop" disabled>停止</button>
         <button id="btnReset">セッション初期化</button>
-        <span class="muted">カメラ権限が必要です（HTTPS/localhostのみ動作）</span>
+        <span class="muted">※ HTTPS/localhost でのみカメラ使用可</span>
       </div>
-      <div id="reader" class="card" style="aspect-ratio:4/3;"></div>
+      <div id="reader" class="card"></div>
       <div class="row">
         <label>カメラ: <select id="cameraSelect"></select></label>
         <label><input type="checkbox" id="chkTorch"/> トーチ（対応端末）</label>
-        <button id="btnGrant">権限リクエスト</button>
-        <button id="btnCheck">環境を診断</button>
       </div>
-      <pre id="diagOut" style="background:#0b1020;border:1px solid #374151;border-radius:8px;padding:8px;margin-top:8px;max-height:220px;overflow:auto"></pre>
     </section>
 
     <section class="card">
@@ -71,11 +57,11 @@
             <div>受信: <span id="progress">0/0</span></div>
             <div>不足: <span id="missing">-</span></div>
           </div>
-          <p class="muted" style="margin-top:8px">※ QRペイロードの想定フォーマット: <code>[idx/total]|session|payload</code></p>
+          <p class="muted" style="margin-top:8px">QRテキスト形式: <code>[idx/total]|session|payload</code></p>
         </div>
         <div>
           <h3 style="margin:0 0 8px">受信ログ（結合プレビュー）</h3>
-          <textarea id="preview" placeholder="受信済みのチャンクを連結した内容を表示します"></textarea>
+          <textarea id="preview" placeholder="受信済みのチャンクを連結して表示"></textarea>
           <div class="row" style="justify-content:flex-end">
             <button id="btnSaveTxt">.txt として保存</button>
             <button id="btnShareTxt">共有（Gmail/Drive など）</button>
@@ -85,27 +71,18 @@
     </section>
   </main>
 
-  <!-- ローダ：ライブラリが無くても落ちないようガード -->
+  <!-- html5-qrcode（ローカル同梱推奨） -->
+  <script src="./libs/html5-qrcode.min.js?v=3"></script>
   <script>
-    const log = (m)=>{ const o=document.getElementById('diagOut'); if(o){ o.textContent += m+'\\n'; } };
-    const setBanner = (msg, color='#f59e0b') => { const b=document.getElementById('banner'); b.style.display='block'; b.style.background=color; b.textContent=msg; };
-    const ready = {};
-  </script>
-
-  <!-- html5-qrcode をローカル同梱（無ければバナー/ログを出す） -->
-  <script src="./libs/html5-qrcode.min.js?v=3"
-          onload="ready.lib=true;log('html5-qrcode: loaded')"
-          onerror="ready.lib=false;setBanner('html5-qrcode を読み込めませんでした（/libs 配置を確認）');log('html5-qrcode: failed')"></script>
-
-  <script>
-    // PWA登録（失敗しても処理継続）
+    // PWA登録（失敗しても無視）
     (async () => {
-      const el = document.getElementById('pwaStatus');
-      if (window.matchMedia('(display-mode: standalone)').matches) el.textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=3'); } catch(e) { log('SW register failed: '+e); } }
+      if (window.matchMedia('(display-mode: standalone)').matches)
+        document.getElementById('pwaStatus').textContent = 'PWA ✓';
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=3'); } catch {} }
     })();
 
     // 状態
+    let firstScanDone = false;      // ← 初回スキャンでバイブ用
     let currentSession = null, total = 0;
     const chunks = new Map();
     const els = {
@@ -120,88 +97,119 @@
     };
 
     function resetSession() {
+      firstScanDone = false;
       currentSession = null; total = 0; chunks.clear();
-      els.session.textContent = '(未検出)'; els.progress.textContent = '0/0'; els.missing.textContent = '-'; els.preview.value='';
+      els.session.textContent = '(未検出)';
+      els.progress.textContent = '0/0';
+      els.missing.textContent = '-';
+      els.preview.value = '';
     }
     function updateProgress() {
-      const have = chunks.size; els.progress.textContent = `${have}/${total}`;
+      const have = chunks.size;
+      els.progress.textContent = `${have}/${total}`;
       const miss = []; for (let i=1;i<=total;i++) if(!chunks.has(i)) miss.push(i);
-      els.missing.textContent = total ? (miss.length?miss.join(','):'なし') : '-';
-      if (total && have===total) { let out=''; for (let i=1;i<=total;i++) out += chunks.get(i)||''; els.preview.value=out; }
+      els.missing.textContent = total ? (miss.length ? miss.join(',') : 'なし') : '-';
+      if (total && have===total) {
+        let out = ''; for (let i=1;i<=total;i++) out += chunks.get(i) || '';
+        els.preview.value = out;
+      }
+    }
+    function vibrateOnce() {
+      // 初回ヒット時のみ軽くバイブ
+      if (!firstScanDone && navigator.vibrate) {
+        navigator.vibrate(60); // 60ms くらいが上品
+        firstScanDone = true;
+      }
     }
     function ingestPayload(text) {
-      const m = text.match(/^\\[(\\d+)\\/(\\d+)\\]\\|(.*?)\\|(.*)$/s); if(!m){ log('format skip'); return; }
+      // 形式: "[idx/total]|session|payload"
+      const m = text.match(/^\\[(\\d+)\\/(\\d+)\\]\\|(.*?)\\|(.*)$/s);
+      if (!m) return;
       const idx=+m[1], tot=+m[2], ses=m[3], payload=m[4];
-      if (!currentSession){ currentSession=ses; total=tot; els.session.textContent=ses; }
-      if (ses!==currentSession || tot!==total) return;
-      if (!chunks.has(idx)){ chunks.set(idx,payload); updateProgress(); }
+
+      if (!currentSession) {
+        currentSession = ses; total = tot; els.session.textContent = ses;
+      }
+      if (ses !== currentSession || tot !== total) return;
+      if (!chunks.has(idx)) {
+        chunks.set(idx, payload);
+        updateProgress();
+        vibrateOnce(); // ★ 初回だけブルッ
+      }
     }
 
-    // 生カメラテスト
-    document.getElementById('btnVideoTest').addEventListener('click', async () => {
-      try {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error('getUserMedia 未対応');
-        const v = document.getElementById('videoTest');
-        const s = await navigator.mediaDevices.getUserMedia({ video: true });
-        v.srcObject = s; v.style.display='block'; log('videoTest: OK');
-      } catch(e) { alert('生カメラ起動失敗: ' + (e.name||'') + ' ' + e.message); log('videoTest fail: '+e); }
-    });
+    // カメラ周り
+    const html5Qr = new Html5Qrcode('reader');
+    let running = false;
 
-    // 権限・診断
     async function listCameras() {
-      if (!window.Html5Qrcode) { log('Html5Qrcode 未定義'); return; }
       try {
         const devices = await Html5Qrcode.getCameras();
-        const sel = els.cameraSelect; sel.innerHTML='';
-        if (!devices || !devices.length) { const o=document.createElement('option'); o.text='（検出なし）'; sel.add(o); return; }
-        devices.forEach(d=>{ const o=document.createElement('option'); o.value=d.id; o.text=d.label||d.id; sel.add(o); });
-        log('cameras: '+devices.length);
+        els.cameraSelect.innerHTML = '';
+        if (!devices || !devices.length) {
+          const o = document.createElement('option'); o.text = '（カメラ検出なし）'; els.cameraSelect.add(o);
+          return;
+        }
+        devices.forEach(d => { const o=document.createElement('option'); o.value=d.id; o.text=d.label||d.id; els.cameraSelect.add(o); });
         els.btnStart.disabled = false;
-      } catch(e) { log('camera enum fail: '+e); }
+      } catch {
+        const o = document.createElement('option'); o.text = '（列挙失敗）'; els.cameraSelect.add(o);
+      }
     }
-    document.getElementById('btnGrant').addEventListener('click', async () => {
-      try {
-        const s = await navigator.mediaDevices.getUserMedia({ video: true });
-        s.getTracks().forEach(t=>t.stop()); log('permission granted');
-        listCameras();
-      } catch(e) { alert('権限取得に失敗: ' + e.message); log('permission fail: '+e); }
-    });
-    document.getElementById('btnCheck').addEventListener('click', async () => {
-      const lines=[]; const isHttps = location.protocol==='https:' || location.hostname==='localhost';
-      lines.push(`URL: ${location.href}`); lines.push(`HTTPS/localhost: ${isHttps?'OK':'NG'}`);
-      if (navigator.permissions?.query) { try{ const st=await navigator.permissions.query({name:'camera'}); lines.push('Permissions.camera: '+st.state); }catch(e){ lines.push('Permissions.camera: 不明'); } }
-      try { const s = await navigator.mediaDevices.getUserMedia({ video:true }); s.getTracks().forEach(t=>t.stop()); lines.push('getUserMedia: OK'); } catch(e){ lines.push('getUserMedia: 失敗 -> '+e.name+': '+e.message); }
-      lines.push('Html5Qrcode: '+(window.Html5Qrcode?'OK':'未ロード'));
-      document.getElementById('diagOut').textContent = lines.join('\\n');
-    });
 
-    // スキャン開始/停止
-    let html5Qr = null, running=false;
     async function start() {
-      if (!window.Html5Qrcode) { alert('ライブラリ未ロードです。/libs/html5-qrcode.min.js を配置してください。'); return; }
       if (running) return;
-      if (!html5Qr) html5Qr = new Html5Qrcode('reader');
       const camId = els.cameraSelect.value || undefined;
-      await html5Qr.start(camId ? { deviceId: { exact: camId } } : { facingMode:'environment' }, { fps:15, qrbox:{width:480,height:360} }, (t)=>ingestPayload(t.trim()), ()=>{});
-      running=true; els.btnStart.disabled=true; els.btnStop.disabled=false;
+      await html5Qr.start(
+        camId ? { deviceId: { exact: camId } } : { facingMode: 'environment' },
+        { fps: 15, qrbox: { width: 480, height: 360 } },
+        (t)=> ingestPayload(t.trim()),
+        ()=>{} // 失敗は無視
+      );
+      running = true; els.btnStart.disabled = true; els.btnStop.disabled = false;
     }
     async function stop() {
-      if (!running || !html5Qr) return;
-      await html5Qr.stop(); running=false; els.btnStart.disabled=false; els.btnStop.disabled=true;
+      if (!running) return;
+      await html5Qr.stop();
+      running = false; els.btnStart.disabled = false; els.btnStop.disabled = true;
     }
-    document.getElementById('btnStart').addEventListener('click', start);
-    document.getElementById('btnStop').addEventListener('click', stop);
-    document.getElementById('btnReset').addEventListener('click', resetSession);
+
+    // トーチ
+    els.chkTorch.addEventListener('change', async (ev) => {
+      try { await html5Qr.applyVideoConstraints({ advanced: [{ torch: ev.target.checked }] }); } catch {}
+    });
+
+    // 保存/共有
+    function getResultBlob() {
+      return new Blob([els.preview.value || ''], { type: 'text/plain' });
+    }
+    document.getElementById('btnSaveTxt').addEventListener('click', () => {
+      const blob = getResultBlob(); const a=document.createElement('a'); const url=URL.createObjectURL(blob);
+      a.href=url; a.download=`qrlog-${currentSession||'session'}-${new Date().toISOString().replace(/[:.]/g,'-')}.txt`;
+      a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
+    document.getElementById('btnShareTxt').addEventListener('click', async () => {
+      const file = new File([getResultBlob()], `qrlog-${currentSession||'session'}.txt`, { type:'text/plain' });
+      if (navigator.canShare && navigator.canShare({ files:[file] })) {
+        try { await navigator.share({ files:[file], title:'QR Log', text:'連結ログ' }); } catch {}
+      } else {
+        // 非対応は保存にフォールバック
+        const a=document.createElement('a'); const url=URL.createObjectURL(file);
+        a.href=url; a.download=file.name; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+      }
+    });
 
     // 起動
     (async () => {
-      try {
-        resetSession();
-        if (!(location.protocol==='https:' || location.hostname==='localhost')) setBanner('このページは HTTPS で開いてください（GitHub Pages の https:// から）。');
-        if (!navigator.mediaDevices?.getUserMedia) setBanner('このブラウザは getUserMedia に未対応です。Chrome/Edge の最新版を使用してください。');
-        if (window.Html5Qrcode) { await listCameras(); } else { setBanner('Html5Qrcode が未ロードです。/libs/html5-qrcode.min.js を配置してください。'); }
-      } catch(e) { setBanner('初期化エラー: '+e.message); }
+      resetSession();
+      // 端末の権限プロンプトは開始ボタン時に出す。ここではデバイス列挙だけ試行。
+      await listCameras();
     })();
+
+    // ボタン
+    document.getElementById('btnStart').addEventListener('click', start);
+    document.getElementById('btnStop').addEventListener('click', stop);
+    document.getElementById('btnReset').addEventListener('click', resetSession);
   </script>
 </body>
 </html>
