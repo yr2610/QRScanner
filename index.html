@@ -20,7 +20,8 @@
     button[disabled]{opacity:.5; cursor:not-allowed;}
     button:hover { background:#1f2937; }
     .muted { color:#9ca3af; font-size:12px; }
-    #reader { width:100%; max-width:640px; margin:0 auto; aspect-ratio:4/3; }
+    #reader { width:75%; max-width:480px; margin:0; aspect-ratio:4/3; }
+    #missing { display:block; max-width:100%; white-space:normal; overflow:hidden; line-height:1.4; max-height:2.8em; }
     textarea { width:100%; height:200px; resize:vertical; background:#0b1020; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:8px; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
     @media (max-width:720px){ .grid{ grid-template-columns:1fr; } }
@@ -82,7 +83,6 @@
     })();
 
     // 状態
-    let firstScanDone = false;      // 初回スキャンでバイブ
     let currentSession = null, total = 0;
     const chunks = new Map();
     const els = {
@@ -97,7 +97,6 @@
     };
 
     function resetSession() {
-      firstScanDone = false;
       currentSession = null; total = 0; chunks.clear();
       els.session.textContent = '(未検出)';
       els.progress.textContent = '0/0';
@@ -108,14 +107,23 @@
       const have = chunks.size;
       els.progress.textContent = `${have}/${total}`;
       const miss = []; for (let i=1;i<=total;i++) if(!chunks.has(i)) miss.push(i);
-      els.missing.textContent = total ? (miss.length ? miss.join(',') : 'なし') : '-';
+      if (!total) {
+        els.missing.textContent = '-';
+      } else if (!miss.length) {
+        els.missing.textContent = 'なし';
+      } else {
+        const maxDisplay = 20;
+        const shown = miss.slice(0, maxDisplay).join(',');
+        const remainder = miss.length - maxDisplay;
+        els.missing.textContent = remainder > 0 ? `${shown} …(+${remainder})` : shown;
+      }
       if (total && have===total) {
         let out = ''; for (let i=1;i<=total;i++) out += chunks.get(i) || '';
         els.preview.value = out;
       }
     }
-    function vibrateOnce() {
-      if (!firstScanDone && navigator.vibrate) { navigator.vibrate(60); firstScanDone = true; }
+    function vibrateOnProgress() {
+      if (navigator.vibrate) navigator.vibrate(60);
     }
 
     // 新旧フォーマット対応のパーサ
@@ -140,7 +148,7 @@
       if (!(Number.isInteger(idx) && Number.isInteger(tot) && idx>=1 && tot>=1 && idx<=tot)) return;
       if (!currentSession) { currentSession = ses; total = tot; els.session.textContent = currentSession; }
       if (ses !== currentSession || tot !== total) return;
-      if (!chunks.has(idx)) { chunks.set(idx, payload); updateProgress(); vibrateOnce(); }
+      if (!chunks.has(idx)) { chunks.set(idx, payload); updateProgress(); vibrateOnProgress(); }
     }
 
     // カメラ
