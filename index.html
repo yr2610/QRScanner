@@ -26,6 +26,8 @@
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
     @media (max-width:720px){ .grid{ grid-template-columns:1fr; } }
     .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#111827; border:1px solid #374151; font-size:12px; }
+    .skipcode-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .skipcode-row code { font-size:18px; letter-spacing:2px; }
   </style>
 </head>
 <body>
@@ -56,7 +58,12 @@
           <div class="row" style="gap:16px">
             <div>セッション: <code id="sessionId">(未検出)</code></div>
             <div>受信: <span id="progress">0/0</span></div>
+            <div>進捗: <span id="progressPercent">0%</span></div>
             <div>不足: <span id="missing">-</span></div>
+          </div>
+          <div class="skipcode-row">
+            <div>SkipCode32: <code id="skipCode">0000000</code></div>
+            <button id="btnCopySkipCode">コピー</button>
           </div>
           <p class="muted" style="margin-top:8px">QRテキスト形式: <code>Q4|&lt;idxHex&gt;/&lt;totHex&gt;|&lt;sid&gt;|&lt;payload&gt;</code></p>
         </div>
@@ -74,7 +81,9 @@
 
   <!-- html5-qrcode（ローカル同梱推奨） -->
   <script src="./libs/html5-qrcode.min.js?v=3"></script>
-  <script>
+  <script type="module">
+    import { encodeMask32, makeMaskFromGot } from './skipcode32.js?v=1';
+
     // PWA登録（失敗しても無視）
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
@@ -88,42 +97,85 @@
     const els = {
       session: document.getElementById('sessionId'),
       progress: document.getElementById('progress'),
+      progressPercent: document.getElementById('progressPercent'),
       missing: document.getElementById('missing'),
       preview: document.getElementById('preview'),
       cameraSelect: document.getElementById('cameraSelect'),
       chkTorch: document.getElementById('chkTorch'),
       btnStart: document.getElementById('btnStart'),
       btnStop: document.getElementById('btnStop'),
+      skipCode: document.getElementById('skipCode'),
+      btnCopySkipCode: document.getElementById('btnCopySkipCode'),
     };
+
+    let lastSkipCode = '0000000';
 
     function resetSession() {
       currentSession = null; total = 0; chunks.clear();
       els.session.textContent = '(未検出)';
       els.progress.textContent = '0/0';
+      els.progressPercent.textContent = '0%';
       els.missing.textContent = '-';
       els.preview.value = '';
+      lastSkipCode = '0000000';
+      els.skipCode.textContent = lastSkipCode;
+    }
+    function vibrateOnSkipCodeChange() {
+      if (navigator.vibrate) navigator.vibrate(20);
     }
     function updateProgress() {
       const have = chunks.size;
       els.progress.textContent = `${have}/${total}`;
-      const miss = []; for (let i=1;i<=total;i++) if(!chunks.has(i)) miss.push(i);
       if (!total) {
+        els.progressPercent.textContent = '0%';
         els.missing.textContent = '-';
-      } else if (!miss.length) {
+        const code = encodeMask32(0);
+        if (code !== lastSkipCode) {
+          lastSkipCode = code;
+        }
+        els.skipCode.textContent = code;
+        return;
+      }
+
+      const percent = ((have / total) * 100).toFixed(0);
+      els.progressPercent.textContent = `${percent}%`;
+
+      const maxDisplay = 20;
+      const missShown = [];
+      let remainder = 0;
+      const got = new Array(total);
+      for (let i = 1; i <= total; i++) {
+        const hasChunk = chunks.has(i);
+        got[i - 1] = hasChunk;
+        if (!hasChunk) {
+          if (missShown.length < maxDisplay) {
+            missShown.push(i);
+          } else {
+            remainder++;
+          }
+        }
+      }
+
+      if (!missShown.length && remainder === 0) {
         els.missing.textContent = 'なし';
       } else {
-        const maxDisplay = 20;
-        const shown = miss.slice(0, maxDisplay).join(',');
-        const remainder = miss.length - maxDisplay;
+        const shown = missShown.join(',');
         els.missing.textContent = remainder > 0 ? `${shown} …(+${remainder})` : shown;
       }
-      if (total && have===total) {
-        let out = ''; for (let i=1;i<=total;i++) out += chunks.get(i) || '';
+
+      const mask = makeMaskFromGot(got, total);
+      const code = encodeMask32(mask);
+      if (code !== lastSkipCode) {
+        lastSkipCode = code;
+        vibrateOnSkipCodeChange();
+      }
+      els.skipCode.textContent = code;
+
+      if (have === total) {
+        let out = '';
+        for (let i = 1; i <= total; i++) out += chunks.get(i) || '';
         els.preview.value = out;
       }
-    }
-    function vibrateOnProgress() {
-      if (navigator.vibrate) navigator.vibrate(60);
     }
 
     // 新旧フォーマット対応のパーサ
@@ -148,15 +200,15 @@
       if (!(Number.isInteger(idx) && Number.isInteger(tot) && idx>=1 && tot>=1 && idx<=tot)) return;
       if (!currentSession) { currentSession = ses; total = tot; els.session.textContent = currentSession; }
       if (ses !== currentSession || tot !== total) return;
-      if (!chunks.has(idx)) { chunks.set(idx, payload); updateProgress(); vibrateOnProgress(); }
+      if (!chunks.has(idx)) { chunks.set(idx, payload); updateProgress(); }
     }
 
     // カメラ
-    const html5Qr = new Html5Qrcode('reader');
+    const html5Qr = new window.Html5Qrcode('reader');
     let running = false;
     async function listCameras() {
       try {
-        const devices = await Html5Qrcode.getCameras();
+        const devices = await window.Html5Qrcode.getCameras();
         els.cameraSelect.innerHTML = '';
         if (!devices || !devices.length) {
           const o = document.createElement('option'); o.text = '（カメラ検出なし）'; els.cameraSelect.add(o); return;
@@ -205,7 +257,24 @@
       }
     });
 
-    (async () => { resetSession(); await listCameras(); })();
+    els.btnCopySkipCode.addEventListener('click', async () => {
+      const code = els.skipCode.textContent || '';
+      if (!code) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try { await navigator.clipboard.writeText(code); return; } catch {}
+      }
+      const area = document.createElement('textarea');
+      area.value = code;
+      area.setAttribute('readonly', 'true');
+      area.style.position = 'absolute';
+      area.style.left = '-9999px';
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(area);
+    });
+
+    (async () => { resetSession(); await listCameras(); updateProgress(); })();
     document.getElementById('btnStart').addEventListener('click', start);
     document.getElementById('btnStop').addEventListener('click', stop);
     document.getElementById('btnReset').addEventListener('click', resetSession);
