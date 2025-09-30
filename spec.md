@@ -62,6 +62,20 @@ Q4|<idxHex>/<totHex>|<sid>|<payload>
 
 ## 5. オプション（推奨）
 
+### 5.0 SkipCode32（7文字スキップコード）
+
+* 受信側PWAは既読バケツを 32bit マスクで通知できる。
+* 文字集合は `0123456789abcdefghijkmnopqrstuvw`（Base32/l 除外）。
+* マスクは MSB=バケツ0 となる 32bit を 5bit×7=35bit にエンコードする。
+  * 実装例: [`Sender/Core/SkipCode32.cs`](Sender/Core/SkipCode32.cs)
+  * 例: `0x80000003` → `k3p0c1a`（先頭と末尾2バケツを送信）。
+* 送信側は SkipCode を入力（空なら全件）し、該当バケツのみを再送する。
+  * バケツ境界: `start = floor(b * total / 32)`, `end = min(total-1, floor((b+1)*total/32)-1)`
+  * 既読追跡が無い場合は該当範囲の全チャンクを再送で可。
+* UI 例: SkipCode 入力欄と「適用」ボタン、適用時に対象件数を表示。
+
+---
+
 ### 5.1 チャンクCRC（軽量の局所検査）
 
 * 各QR末尾に **`~` + CRC8（2桁Hex）** を追加:
