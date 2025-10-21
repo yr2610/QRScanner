@@ -82,7 +82,7 @@
   <!-- html5-qrcode（ローカル同梱推奨） -->
   <script src="./libs/html5-qrcode.min.js?v=3"></script>
   <script type="module">
-    import { encode, makeMaskFromGot, pretty } from './skipcode32.js?v=2';
+    import { bucketRange, encode, pretty } from './skipcode32.js?v=2';
 
     // PWA登録（失敗しても無視）
     (async () => {
@@ -107,9 +107,94 @@
       skipCode: document.getElementById('skipCode'),
     };
 
+    const BUCKETS = 32;
     const INITIAL_MASK = 0 >>> 0;
-    let prevCompleteMask = INITIAL_MASK;
-    let lastDisplayCode = encode((~INITIAL_MASK) >>> 0);
+    const INITIAL_SKIP_MASK = (~INITIAL_MASK) >>> 0;
+    let lastSkipMask = INITIAL_SKIP_MASK;
+    let lastDisplayCode = encode(INITIAL_SKIP_MASK);
+    let bucketSetupTotal = 0;
+    let bucketSizes = new Uint16Array(BUCKETS);
+    let bucketCounts = new Uint16Array(BUCKETS);
+    let seenChunks = new Uint8Array(0);
+
+    function applySkipCode(mask, { force = false, vibrate = true } = {}) {
+      mask = (mask >>> 0);
+      if (!force && mask === lastSkipMask) return;
+      const code = encode(mask);
+      const shouldUpdate = force || code !== lastDisplayCode;
+      lastSkipMask = mask;
+      lastDisplayCode = code;
+      if (shouldUpdate) {
+        els.skipCode.textContent = pretty(code);
+        if (!force && vibrate && navigator.vibrate) navigator.vibrate(20);
+      }
+    }
+
+    function bucketIndexFor(idx) {
+      if (!total) return 0;
+      const clampedIdx = Math.max(1, Math.min(total, idx));
+      return Math.min(BUCKETS - 1, Math.floor(((clampedIdx * BUCKETS) - 1) / total));
+    }
+
+    function rebuildBucketState() {
+      const T = Math.max(0, Math.floor(total)) >>> 0;
+      seenChunks = new Uint8Array(T);
+      bucketCounts = new Uint16Array(BUCKETS);
+      if (!T) return;
+      for (const key of chunks.keys()) {
+        const idxNum = Number(key);
+        if (!Number.isInteger(idxNum)) continue;
+        if (idxNum < 1 || idxNum > T) continue;
+        const pos = idxNum - 1;
+        if (seenChunks[pos]) continue;
+        seenChunks[pos] = 1;
+        const bucket = bucketIndexFor(idxNum);
+        if (bucketSizes[bucket] > 0 && bucketCounts[bucket] < bucketSizes[bucket]) {
+          bucketCounts[bucket]++;
+        }
+      }
+    }
+
+    function prepareBucketsForTotal(newTotal) {
+      const T = Math.max(0, Math.floor(newTotal)) >>> 0;
+      bucketSetupTotal = T;
+      bucketSizes = new Uint16Array(BUCKETS);
+      for (let bucket = 0; bucket < BUCKETS; bucket++) {
+        const [start, end] = bucketRange(bucket, T);
+        bucketSizes[bucket] = end >= start ? (end - start + 1) : 0;
+      }
+      rebuildBucketState();
+      applySkipCode(computeMissingMask(), { force: true, vibrate: false });
+    }
+
+    function ensureBucketSetup() {
+      if (bucketSetupTotal !== total) {
+        prepareBucketsForTotal(total);
+      }
+    }
+
+    function markChunkSeen(idx) {
+      if (!total) return;
+      ensureBucketSetup();
+      if (idx < 1 || idx > total) return;
+      const pos = idx - 1;
+      if (seenChunks[pos]) return;
+      seenChunks[pos] = 1;
+      const bucket = bucketIndexFor(idx);
+      const size = bucketSizes[bucket];
+      if (!size) return;
+      if (bucketCounts[bucket] < size) bucketCounts[bucket]++;
+    }
+
+    function computeMissingMask() {
+      let mask = 0 >>> 0;
+      for (let bucket = 0; bucket < BUCKETS; bucket++) {
+        const size = bucketSizes[bucket];
+        if (!size) continue;
+        if (bucketCounts[bucket] < size) mask |= (1 << (31 - bucket));
+      }
+      return mask >>> 0;
+    }
 
     function resetSession() {
       currentSession = null; total = 0; chunks.clear();
@@ -118,12 +203,13 @@
       els.progressPercent.textContent = '0%';
       els.missing.textContent = '-';
       els.preview.value = '';
-      prevCompleteMask = INITIAL_MASK;
-      lastDisplayCode = encode((~prevCompleteMask) >>> 0);
+      bucketSetupTotal = 0;
+      bucketSizes = new Uint16Array(BUCKETS);
+      bucketCounts = new Uint16Array(BUCKETS);
+      seenChunks = new Uint8Array(0);
+      lastSkipMask = INITIAL_SKIP_MASK;
+      lastDisplayCode = encode(INITIAL_SKIP_MASK);
       els.skipCode.textContent = pretty(lastDisplayCode);
-    }
-    function vibrateOnSkipCodeChange() {
-      if (navigator.vibrate) navigator.vibrate(20);
     }
     function updateProgress() {
       const have = chunks.size;
@@ -131,13 +217,9 @@
       if (!total) {
         els.progressPercent.textContent = '0%';
         els.missing.textContent = '-';
-        prevCompleteMask = INITIAL_MASK;
-        const displayCode = encode((~prevCompleteMask) >>> 0);
-        if (displayCode !== lastDisplayCode) {
-          lastDisplayCode = displayCode;
-          vibrateOnSkipCodeChange();
-        }
-        els.skipCode.textContent = pretty(displayCode);
+        lastSkipMask = INITIAL_SKIP_MASK;
+        lastDisplayCode = encode(INITIAL_SKIP_MASK);
+        els.skipCode.textContent = pretty(lastDisplayCode);
         return;
       }
 
@@ -147,10 +229,8 @@
       const maxDisplay = 20;
       const missShown = [];
       let remainder = 0;
-      const got = new Array(total);
       for (let i = 1; i <= total; i++) {
         const hasChunk = chunks.has(i);
-        got[i - 1] = hasChunk;
         if (!hasChunk) {
           if (missShown.length < maxDisplay) {
             missShown.push(i);
@@ -167,15 +247,9 @@
         els.missing.textContent = remainder > 0 ? `${shown} …(+${remainder})` : shown;
       }
 
-      const completeMask = makeMaskFromGot(got, total);
-      const monotonicComplete = (prevCompleteMask | completeMask) >>> 0;
-      prevCompleteMask = monotonicComplete;
-      const displayCode = encode((~monotonicComplete) >>> 0);
-      if (displayCode !== lastDisplayCode) {
-        lastDisplayCode = displayCode;
-        vibrateOnSkipCodeChange();
-      }
-      els.skipCode.textContent = pretty(displayCode);
+      ensureBucketSetup();
+      const missingMask = computeMissingMask();
+      applySkipCode(missingMask);
 
       if (have === total) {
         let out = '';
@@ -204,9 +278,18 @@
         payload = m[4];
       }
       if (!(Number.isInteger(idx) && Number.isInteger(tot) && idx>=1 && tot>=1 && idx<=tot)) return;
-      if (!currentSession) { currentSession = ses; total = tot; els.session.textContent = currentSession; }
+      if (!currentSession) {
+        currentSession = ses;
+        total = tot;
+        els.session.textContent = currentSession;
+        prepareBucketsForTotal(total);
+      }
       if (ses !== currentSession || tot !== total) return;
-      if (!chunks.has(idx)) { chunks.set(idx, payload); updateProgress(); }
+      if (!chunks.has(idx)) {
+        chunks.set(idx, payload);
+        markChunkSeen(idx);
+        updateProgress();
+      }
     }
 
     // カメラ
