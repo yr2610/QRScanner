@@ -63,7 +63,6 @@
           </div>
           <div class="skipcode-row">
             <div>SkipCode32: <code id="skipCode">0000000</code></div>
-            <button id="btnCopySkipCode">コピー</button>
           </div>
           <p class="muted" style="margin:4px 0 0">7桁入力＝そのまま、6桁以下＝H5T2（途中入力でもOK）。ヘッダのみの場合は不足帯域を31（w/-）で補完します。画面表示の「-」は w と同じ意味です。</p>
           <p class="muted" style="margin-top:8px">QRテキスト形式: <code>Q4|&lt;idxHex&gt;/&lt;totHex&gt;|&lt;sid&gt;|&lt;payload&gt;</code></p>
@@ -106,13 +105,11 @@
       btnStart: document.getElementById('btnStart'),
       btnStop: document.getElementById('btnStop'),
       skipCode: document.getElementById('skipCode'),
-      btnCopySkipCode: document.getElementById('btnCopySkipCode'),
     };
 
     const INITIAL_MASK = 0 >>> 0;
     let prevCompleteMask = INITIAL_MASK;
-    let lastDisplayCode = encode(INITIAL_MASK);
-    let lastClipboardCode = encode((~INITIAL_MASK) >>> 0);
+    let lastDisplayCode = encode((~INITIAL_MASK) >>> 0);
 
     function resetSession() {
       currentSession = null; total = 0; chunks.clear();
@@ -122,8 +119,7 @@
       els.missing.textContent = '-';
       els.preview.value = '';
       prevCompleteMask = INITIAL_MASK;
-      lastDisplayCode = encode(prevCompleteMask);
-      lastClipboardCode = encode((~prevCompleteMask) >>> 0);
+      lastDisplayCode = encode((~prevCompleteMask) >>> 0);
       els.skipCode.textContent = pretty(lastDisplayCode);
     }
     function vibrateOnSkipCodeChange() {
@@ -136,13 +132,11 @@
         els.progressPercent.textContent = '0%';
         els.missing.textContent = '-';
         prevCompleteMask = INITIAL_MASK;
-        const displayCode = encode(prevCompleteMask);
-        const clipboardCode = encode((~prevCompleteMask) >>> 0);
+        const displayCode = encode((~prevCompleteMask) >>> 0);
         if (displayCode !== lastDisplayCode) {
           lastDisplayCode = displayCode;
           vibrateOnSkipCodeChange();
         }
-        lastClipboardCode = clipboardCode;
         els.skipCode.textContent = pretty(displayCode);
         return;
       }
@@ -176,13 +170,11 @@
       const completeMask = makeMaskFromGot(got, total);
       const monotonicComplete = (prevCompleteMask | completeMask) >>> 0;
       prevCompleteMask = monotonicComplete;
-      const displayCode = encode(monotonicComplete);
-      const clipboardCode = encode((~monotonicComplete) >>> 0);
+      const displayCode = encode((~monotonicComplete) >>> 0);
       if (displayCode !== lastDisplayCode) {
         lastDisplayCode = displayCode;
         vibrateOnSkipCodeChange();
       }
-      lastClipboardCode = clipboardCode;
       els.skipCode.textContent = pretty(displayCode);
 
       if (have === total) {
@@ -269,23 +261,6 @@
         const a=document.createElement('a'); const url=URL.createObjectURL(file);
         a.href=url; a.download=file.name; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
       }
-    });
-
-    els.btnCopySkipCode.addEventListener('click', async () => {
-      const code = lastClipboardCode || '';
-      if (!code) return;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        try { await navigator.clipboard.writeText(code); return; } catch {}
-      }
-      const area = document.createElement('textarea');
-      area.value = code;
-      area.setAttribute('readonly', 'true');
-      area.style.position = 'absolute';
-      area.style.left = '-9999px';
-      document.body.appendChild(area);
-      area.select();
-      try { document.execCommand('copy'); } catch {}
-      document.body.removeChild(area);
     });
 
     (async () => { resetSession(); await listCameras(); updateProgress(); })();
