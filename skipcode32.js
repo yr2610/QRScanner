@@ -13,12 +13,12 @@ export function makeMaskFromGot(got, total) {
   let mask = 0 >>> 0;
   for (let bucket = 0; bucket < 32; bucket++) {
     const [start, end] = bucketRange(bucket, T);
-    if (start > end) continue;
-    let missing = false;
+    if (start > end) { mask |= (1 << (31 - bucket)); continue; }
+    let complete = true;
     for (let idx = start; idx <= end; idx++) {
-      if (!got[idx]) { missing = true; break; }
+      if (!got[idx]) { complete = false; break; }
     }
-    if (missing) mask |= (1 << (31 - bucket));
+    if (complete) mask |= (1 << (31 - bucket));
   }
   return mask >>> 0;
 }

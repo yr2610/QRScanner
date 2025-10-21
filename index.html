@@ -109,9 +109,10 @@
       btnCopySkipCode: document.getElementById('btnCopySkipCode'),
     };
 
-    const INITIAL_MASK = 0xFFFFFFFF >>> 0;
-    let prevMask = INITIAL_MASK;
-    let lastSkipCodeRaw = encode(INITIAL_MASK);
+    const INITIAL_MASK = 0 >>> 0;
+    let prevCompleteMask = INITIAL_MASK;
+    let lastDisplayCode = encode(INITIAL_MASK);
+    let lastClipboardCode = encode((~INITIAL_MASK) >>> 0);
 
     function resetSession() {
       currentSession = null; total = 0; chunks.clear();
@@ -120,9 +121,10 @@
       els.progressPercent.textContent = '0%';
       els.missing.textContent = '-';
       els.preview.value = '';
-      prevMask = INITIAL_MASK;
-      lastSkipCodeRaw = encode(prevMask);
-      els.skipCode.textContent = pretty(lastSkipCodeRaw);
+      prevCompleteMask = INITIAL_MASK;
+      lastDisplayCode = encode(prevCompleteMask);
+      lastClipboardCode = encode((~prevCompleteMask) >>> 0);
+      els.skipCode.textContent = pretty(lastDisplayCode);
     }
     function vibrateOnSkipCodeChange() {
       if (navigator.vibrate) navigator.vibrate(20);
@@ -133,13 +135,15 @@
       if (!total) {
         els.progressPercent.textContent = '0%';
         els.missing.textContent = '-';
-        prevMask = INITIAL_MASK;
-        const code = encode(prevMask);
-        if (code !== lastSkipCodeRaw) {
-          lastSkipCodeRaw = code;
+        prevCompleteMask = INITIAL_MASK;
+        const displayCode = encode(prevCompleteMask);
+        const clipboardCode = encode((~prevCompleteMask) >>> 0);
+        if (displayCode !== lastDisplayCode) {
+          lastDisplayCode = displayCode;
           vibrateOnSkipCodeChange();
         }
-        els.skipCode.textContent = pretty(code);
+        lastClipboardCode = clipboardCode;
+        els.skipCode.textContent = pretty(displayCode);
         return;
       }
 
@@ -169,15 +173,17 @@
         els.missing.textContent = remainder > 0 ? `${shown} …(+${remainder})` : shown;
       }
 
-      const mask = makeMaskFromGot(got, total);
-      const monotonicMask = (prevMask & mask) >>> 0;
-      prevMask = monotonicMask;
-      const code = encode(monotonicMask);
-      if (code !== lastSkipCodeRaw) {
-        lastSkipCodeRaw = code;
+      const completeMask = makeMaskFromGot(got, total);
+      const monotonicComplete = (prevCompleteMask | completeMask) >>> 0;
+      prevCompleteMask = monotonicComplete;
+      const displayCode = encode(monotonicComplete);
+      const clipboardCode = encode((~monotonicComplete) >>> 0);
+      if (displayCode !== lastDisplayCode) {
+        lastDisplayCode = displayCode;
         vibrateOnSkipCodeChange();
       }
-      els.skipCode.textContent = pretty(code);
+      lastClipboardCode = clipboardCode;
+      els.skipCode.textContent = pretty(displayCode);
 
       if (have === total) {
         let out = '';
@@ -266,7 +272,7 @@
     });
 
     els.btnCopySkipCode.addEventListener('click', async () => {
-      const code = lastSkipCodeRaw || '';
+      const code = lastClipboardCode || '';
       if (!code) return;
       if (navigator.clipboard && navigator.clipboard.writeText) {
         try { await navigator.clipboard.writeText(code); return; } catch {}
