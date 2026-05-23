@@ -34,13 +34,15 @@ function toSym7(mask: number): string {
   return out;
 }
 
+function tailLength(sym7: string): number {
+  if (sym7[6] !== '0') return 2;
+  return sym7[5] !== '0' ? 1 : 0;
+}
+
 function tryH5T2Length(sym7: string): number {
   let body = 0;
   for (let i = 0; i < 5; i++) if (sym7[i] !== '0') body++;
-  let tail = 0;
-  if (sym7[5] !== '0') tail++;
-  if (sym7[6] !== '0') tail++;
-  return 1 + body + tail;
+  return 1 + body + tailLength(sym7);
 }
 
 export function encode(mask: number): string {
@@ -51,8 +53,9 @@ export function encode(mask: number): string {
     for (let i = 0; i < 5; i++) if (sym7[i] !== '0') header |= (1 << (4 - i));
     let out = ALPHABET[header];
     for (let i = 0; i < 5; i++) if (sym7[i] !== '0') out += sym7[i];
-    if (sym7[5] !== '0') out += sym7[5];
-    if (sym7[6] !== '0') out += sym7[6];
+    const tail = tailLength(sym7);
+    if (tail >= 1) out += sym7[5];
+    if (tail >= 2) out += sym7[6];
     return out;
   }
   return sym7;
