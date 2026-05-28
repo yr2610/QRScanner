@@ -20,7 +20,23 @@
     button[disabled]{opacity:.5; cursor:not-allowed;}
     button:hover { background:#1f2937; }
     .muted { color:#9ca3af; font-size:12px; }
-    #reader { width:75%; max-width:480px; margin:0; aspect-ratio:4/3; }
+    #readerShell { position:relative; width:75%; max-width:480px; margin:0; aspect-ratio:4/3; }
+    #reader { width:100%; height:100%; margin:0; box-sizing:border-box; }
+    #completeOverlay {
+      position:absolute;
+      inset:0;
+      display:none;
+      place-items:center;
+      text-align:center;
+      background:#07111f;
+      border:1px solid #2563eb;
+      border-radius:12px;
+      box-shadow:0 0 0 1px rgba(96,165,250,.25) inset;
+      z-index:5;
+    }
+    #completeOverlay.show { display:grid; }
+    .complete-title { font-size:clamp(30px, 7vw, 56px); font-weight:800; line-height:1.05; color:#f8fafc; }
+    .complete-subtitle { margin-top:12px; font-size:14px; color:#93c5fd; }
     #missing { display:block; max-width:100%; white-space:normal; overflow:hidden; line-height:1.4; max-height:2.8em; }
     textarea { width:100%; height:200px; resize:vertical; background:#0b1020; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:8px; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
@@ -50,7 +66,15 @@
         </label>
         <span class="muted">※ HTTPS/localhost でのみカメラ使用可</span>
       </div>
-      <div id="reader" class="card"></div>
+      <div id="readerShell">
+        <div id="reader" class="card"></div>
+        <div id="completeOverlay" aria-live="polite">
+          <div>
+            <div class="complete-title">復元完了</div>
+            <div class="complete-subtitle">元ファイルを保存します</div>
+          </div>
+        </div>
+      </div>
       <div class="row">
         <label>カメラ: <select id="cameraSelect"></select></label>
         <label><input type="checkbox" id="chkTorch"/> トーチ（対応端末）</label>
@@ -98,7 +122,7 @@
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=8'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=9'); } catch {} }
     })();
 
     // 状態
@@ -119,6 +143,7 @@
       skipCode: document.getElementById('skipCode'),
       btnSaveFile: document.getElementById('btnSaveFile'),
       btnShareTxt: document.getElementById('btnShareTxt'),
+      completeOverlay: document.getElementById('completeOverlay'),
     };
 
     const BUCKETS = 32;
@@ -232,6 +257,7 @@
       lastFountainHapticStep = -1;
       autoSavedRecoveryKey = null;
       els.skipCode.textContent = pretty(lastDisplayCode);
+      setCompletionOverlay(false);
       updateRecoveredFileButton();
     }
     function updateProgress() {
@@ -283,6 +309,7 @@
         els.preview.value = out;
       }
 
+      setCompletionOverlay(have === total);
       updateRecoveredFileButton();
     }
 
@@ -323,7 +350,13 @@
         els.missing.textContent += ` / ${fountainDecoder.lastError}`;
       }
 
+      setCompletionOverlay(fountainDecoder.complete);
       updateRecoveredFileButton();
+    }
+
+    function setCompletionOverlay(show) {
+      if (!els.completeOverlay) return;
+      els.completeOverlay.classList.toggle('show', Boolean(show));
     }
 
     function applyFountainHaptic(percent, complete) {
@@ -337,7 +370,7 @@
       if (step <= 0 || step <= lastFountainHapticStep) return;
 
       lastFountainHapticStep = step;
-      navigator.vibrate(complete ? [25, 25, 60] : 20);
+      navigator.vibrate(complete ? 700 : 20);
     }
 
     function hasRecoveredArchive() {
