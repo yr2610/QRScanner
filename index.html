@@ -90,13 +90,13 @@
   <script src="./libs/html5-qrcode.min.js?v=3"></script>
   <script type="module">
     import { bucketRange, encode, pretty } from './skipcode32.js?v=2';
-    import { FountainDecoder, bytesToBase64Url, parseFountainFrame } from './fountain.js?v=1';
+    import { FountainDecoder, bytesToBase64Url, parseFountainFrame } from './fountain.js?v=2';
 
     // PWA登録（失敗しても無視）
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=4'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=5'); } catch {} }
     })();
 
     // 状態
@@ -215,6 +215,7 @@
       els.decodeStatus.textContent = '待機中';
       els.missing.textContent = '-';
       els.preview.value = '';
+      if (fountainDecoder && typeof fountainDecoder.free === 'function') fountainDecoder.free();
       fountainDecoder = null;
       bucketSetupTotal = 0;
       bucketSizes = new Uint16Array(BUCKETS);
@@ -284,11 +285,11 @@
         return;
       }
 
-      const rank = fountainDecoder.rank;
       const need = fountainDecoder.sourceSymbolCount;
       const received = fountainDecoder.received;
-      const percent = Math.min(100, Math.floor((rank / need) * 100));
-      els.progress.textContent = `${rank}/${need}`;
+      const cappedReceived = Math.min(received, need);
+      const percent = fountainDecoder.complete ? 100 : Math.min(99, Math.floor((cappedReceived / need) * 100));
+      els.progress.textContent = `${received}/${need}+`;
       els.progressPercent.textContent = `${percent}%`;
       els.skipCode.textContent = 'fountain';
 
@@ -296,21 +297,25 @@
         els.decodeStatus.textContent = '復元完了';
         els.missing.textContent = `受信 ${received} / 重複 ${fountainDecoder.duplicates}`;
         els.preview.value = bytesToBase64Url(fountainDecoder.recoveredBytes);
-      } else if (rank >= need) {
-        els.decodeStatus.textContent = '復元試行中';
-        els.missing.textContent = `受信 ${received} / 追加読み取り中`;
+      } else if (received >= need) {
+        els.decodeStatus.textContent = '復元待ち';
+        els.missing.textContent = `受信 ${received} / 追加読み取り中 / 重複 ${fountainDecoder.duplicates}`;
       } else {
-        els.decodeStatus.textContent = 'Fountain受信中';
-        els.missing.textContent = `あと ${need - rank} / 受信 ${received} / 重複 ${fountainDecoder.duplicates}`;
+        els.decodeStatus.textContent = 'Wirehair受信中';
+        els.missing.textContent = `目安あと ${need - received} / 受信 ${received} / 重複 ${fountainDecoder.duplicates}`;
+      }
+
+      if (fountainDecoder.lastError) {
+        els.missing.textContent += ` / ${fountainDecoder.lastError}`;
       }
     }
 
-    function ingestFountainPayload(text) {
+    async function ingestFountainPayload(text) {
       const frame = parseFountainFrame(text);
       if (!frame) return;
 
       if (!fountainDecoder) {
-        fountainDecoder = new FountainDecoder(frame);
+        fountainDecoder = await FountainDecoder.create(frame);
         currentSession = frame.sid;
         total = frame.sourceSymbolCount;
         chunks.clear();
@@ -357,12 +362,23 @@
     }
 
     // カメラ
+    let ingestQueue = Promise.resolve();
     function ingestPayload(text) {
-      if (els.modeSelect.value === 'fountain') {
-        ingestFountainPayload(text);
-      } else {
-        ingestLegacyPayload(text);
-      }
+      const payload = text.trim();
+      const mode = els.modeSelect.value;
+      ingestQueue = ingestQueue
+        .then(async () => {
+          if (mode === 'fountain') {
+            await ingestFountainPayload(payload);
+          } else {
+            ingestLegacyPayload(payload);
+          }
+        })
+        .catch((error) => {
+          console.error(error);
+          els.decodeStatus.textContent = '読み取りエラー';
+          els.missing.textContent = error instanceof Error ? error.message : String(error);
+        });
     }
 
     const html5Qr = new window.Html5Qrcode('reader');
