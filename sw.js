@@ -1,8 +1,9 @@
-const CACHE_NAME = 'qrscanner-v3';
+const CACHE_NAME = 'qrscanner-v4';
 const ASSETS = [
   './',
-  './index.html?v=3',
-  './manifest.webmanifest?v=3'
+  './index.html?v=4',
+  './manifest.webmanifest?v=3',
+  './fountain.js?v=1'
   // './libs/html5-qrcode.min.js?v=3'  // 置いた場合は必要に応じて追加
 ];
 
