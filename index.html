@@ -71,7 +71,7 @@
       <div id="completeOverlay" aria-live="polite">
         <div>
           <div class="complete-title">復元完了</div>
-          <div class="complete-subtitle">元ファイルを保存します</div>
+          <div class="complete-subtitle">ファイルを保存します</div>
         </div>
       </div>
       <div class="row">
@@ -101,9 +101,9 @@
           <h3 style="margin:0 0 8px">受信ログ（結合プレビュー）</h3>
           <textarea id="preview" placeholder="受信済みのチャンクを連結して表示"></textarea>
           <div class="row" style="justify-content:flex-end">
-            <button id="btnSaveFile" disabled>元ファイル保存</button>
+            <button id="btnSaveFile" disabled>ファイル保存</button>
             <button id="btnSaveTxt">.txt として保存</button>
-            <button id="btnShareTxt" disabled>共有（元ファイル）</button>
+            <button id="btnShareTxt" disabled>共有</button>
           </div>
         </div>
       </div>
@@ -113,7 +113,7 @@
   <!-- html5-qrcode（ローカル同梱推奨） -->
   <script src="./libs/html5-qrcode.min.js?v=3"></script>
   <script type="module">
-    import { gunzipSync, unzipSync } from './libs/fflate/esm/browser.js';
+    import { gunzipSync, unzipSync, zipSync } from './libs/fflate/esm/browser.js';
     import { bucketRange, encode, pretty } from './skipcode32.js?v=2';
     import { FountainDecoder, base64UrlToBytes, bytesToBase64Url, parseFountainFrame } from './fountain.js?v=2';
 
@@ -121,7 +121,7 @@
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=11'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=13'); } catch {} }
     })();
 
     // 状態
@@ -528,21 +528,6 @@
       return base64UrlToBytes(text.replace(/\s+/g, ''));
     }
 
-    async function tryExtractSingleRootFileFromZip(bytes) {
-      if (!looksZip(bytes)) return null;
-
-      const files = unzipSync(bytes);
-      const names = Object.keys(files).filter(name => !name.endsWith('/'));
-      if (names.length !== 1) return null;
-
-      const name = names[0];
-      if (/[\\/]/.test(name)) return null;
-      return {
-        name: sanitizeDownloadName(name),
-        bytes: files[name],
-      };
-    }
-
     function looksZip(bytes) {
       return bytes.length >= 4 &&
         bytes[0] === 0x50 && bytes[1] === 0x4b &&
@@ -570,16 +555,69 @@
       return `${stem}${ext}`;
     }
 
-    function mimeForName(name) {
-      const lower = name.toLowerCase();
-      if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-      if (lower.endsWith('.png')) return 'image/png';
-      if (lower.endsWith('.gif')) return 'image/gif';
-      if (lower.endsWith('.webp')) return 'image/webp';
-      if (lower.endsWith('.txt') || lower.endsWith('.log')) return 'text/plain';
-      if (lower.endsWith('.json')) return 'application/json';
-      if (lower.endsWith('.zip')) return 'application/zip';
-      return 'application/octet-stream';
+    const DIRECT_FILE_MIME_TYPES = new Map([
+      ['.jpg', 'image/jpeg'],
+      ['.jpeg', 'image/jpeg'],
+      ['.png', 'image/png'],
+      ['.gif', 'image/gif'],
+      ['.webp', 'image/webp'],
+      ['.txt', 'text/plain'],
+      ['.pdf', 'application/pdf'],
+      ['.mp4', 'video/mp4'],
+      ['.zip', 'application/zip'],
+    ]);
+
+    function extensionOf(name) {
+      const dot = name.lastIndexOf('.');
+      return dot >= 0 ? name.slice(dot).toLowerCase() : '';
+    }
+
+    function directMimeTypeForName(name) {
+      return DIRECT_FILE_MIME_TYPES.get(extensionOf(name)) || null;
+    }
+
+    function withZipExtension(name) {
+      const safeName = sanitizeDownloadName(name);
+      const dot = safeName.lastIndexOf('.');
+      const stem = dot > 0 ? safeName.slice(0, dot) : safeName;
+      return `${stem || 'decoded'}.zip`;
+    }
+
+    function zipEntryName(bytes) {
+      if (!looksZip(bytes) || bytes.length < 30) return null;
+
+      const fileNameLength = bytes[26] | (bytes[27] << 8);
+      const fileNameEnd = 30 + fileNameLength;
+      if (fileNameLength <= 0 || fileNameEnd > bytes.length) return null;
+
+      try {
+        const name = new TextDecoder('utf-8').decode(bytes.slice(30, fileNameEnd));
+        if (!name || /[\\/]/.test(name)) return null;
+        return sanitizeDownloadName(name);
+      } catch {
+        return null;
+      }
+    }
+
+    function buildZipDownloadName(bytes) {
+      const entryName = zipEntryName(bytes);
+      if (entryName) return withZipExtension(entryName);
+      return `qrlog-${currentSession||'session'}.zip`;
+    }
+
+    function tryExtractSingleRootFileFromZip(bytes) {
+      if (!looksZip(bytes)) return null;
+
+      const files = unzipSync(bytes);
+      const names = Object.keys(files).filter(name => !name.endsWith('/'));
+      if (names.length !== 1) return null;
+
+      const name = names[0];
+      if (/[\\/]/.test(name)) return null;
+      return {
+        name: sanitizeDownloadName(name),
+        bytes: files[name],
+      };
     }
 
     async function buildRecoveredFilePayload() {
@@ -587,25 +625,31 @@
       if (!recoveredBytes) return null;
 
       const archiveBytes = maybeGunzip(recoveredBytes);
-      let extracted = null;
-      try {
-        extracted = await tryExtractSingleRootFileFromZip(archiveBytes);
-      } catch (error) {
-        console.warn(error);
-      }
+      if (looksZip(archiveBytes)) {
+        try {
+          const extracted = tryExtractSingleRootFileFromZip(archiveBytes);
+          const directMimeType = extracted ? directMimeTypeForName(extracted.name) : null;
+          if (extracted && directMimeType) {
+            return {
+              bytes: extracted.bytes,
+              name: extracted.name,
+              mimeType: directMimeType,
+            };
+          }
+        } catch (error) {
+          console.warn(error);
+        }
 
-      if (extracted) {
         return {
-          bytes: extracted.bytes,
-          name: extracted.name,
-          mimeType: mimeForName(extracted.name),
+          bytes: archiveBytes,
+          name: buildZipDownloadName(archiveBytes),
+          mimeType: 'application/zip',
         };
       }
 
-      const name = `qrlog-${currentSession||'session'}.zip`;
       return {
-        bytes: archiveBytes,
-        name,
+        bytes: zipSync({ 'decoded.bin': archiveBytes }, { level: 6 }),
+        name: `qrlog-${currentSession||'session'}.zip`,
         mimeType: 'application/zip',
       };
     }
