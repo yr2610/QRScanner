@@ -162,6 +162,11 @@ function coefficientBits(symbolId, sourceSymbolCount, wordCount) {
     return bits;
   }
 
+  if (sourceSymbolCount > 1 && symbolId < sourceSymbolCount * 2) {
+    setBit(bits, sourceSymbolCount - 1 - (symbolId - sourceSymbolCount));
+    return bits;
+  }
+
   const rng = new XorShift32(seedFor(symbolId, sourceSymbolCount));
   const degree = chooseDegree(rng, sourceSymbolCount);
   const selected = new Set();
@@ -177,12 +182,13 @@ function coefficientBits(symbolId, sourceSymbolCount, wordCount) {
 function chooseDegree(rng, sourceSymbolCount) {
   if (sourceSymbolCount <= 1) return 1;
   const sample = rng.nextUInt32() % 100;
-  const degree = sample < 42 ? 2 :
-    sample < 67 ? 3 :
-    sample < 82 ? 4 :
-    sample < 92 ? 6 :
-    sample < 98 ? 8 : 12;
-  return Math.min(degree, sourceSymbolCount);
+  const preferred = sample < 15 ? 2 :
+    sample < 30 ? 3 :
+    sample < 50 ? 5 :
+    sample < 70 ? 8 :
+    sample < 85 ? 13 :
+    sample < 95 ? 21 : 34;
+  return Math.min(preferred, Math.min(64, sourceSymbolCount));
 }
 
 class XorShift32 {
