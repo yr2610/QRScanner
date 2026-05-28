@@ -78,6 +78,7 @@
           <h3 style="margin:0 0 8px">受信ログ（結合プレビュー）</h3>
           <textarea id="preview" placeholder="受信済みのチャンクを連結して表示"></textarea>
           <div class="row" style="justify-content:flex-end">
+            <button id="btnSaveFile" disabled>元ファイル保存</button>
             <button id="btnSaveTxt">.txt として保存</button>
             <button id="btnShareTxt">共有（Gmail/Drive など）</button>
           </div>
@@ -89,14 +90,15 @@
   <!-- html5-qrcode（ローカル同梱推奨） -->
   <script src="./libs/html5-qrcode.min.js?v=3"></script>
   <script type="module">
+    import { gunzipSync, unzipSync } from './libs/fflate/esm/browser.js';
     import { bucketRange, encode, pretty } from './skipcode32.js?v=2';
-    import { FountainDecoder, bytesToBase64Url, parseFountainFrame } from './fountain.js?v=2';
+    import { FountainDecoder, base64UrlToBytes, bytesToBase64Url, parseFountainFrame } from './fountain.js?v=2';
 
     // PWA登録（失敗しても無視）
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=5'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=7'); } catch {} }
     })();
 
     // 状態
@@ -115,6 +117,7 @@
       btnStop: document.getElementById('btnStop'),
       modeSelect: document.getElementById('modeSelect'),
       skipCode: document.getElementById('skipCode'),
+      btnSaveFile: document.getElementById('btnSaveFile'),
     };
 
     const BUCKETS = 32;
@@ -127,6 +130,7 @@
     let bucketCounts = new Uint16Array(BUCKETS);
     let seenChunks = new Uint8Array(0);
     let fountainDecoder = null;
+    let lastFountainHapticStep = -1;
 
     function applySkipCode(mask, { force = false, vibrate = true } = {}) {
       mask = (mask >>> 0);
@@ -223,7 +227,9 @@
       seenChunks = new Uint8Array(0);
       lastSkipMask = INITIAL_SKIP_MASK;
       lastDisplayCode = encode(INITIAL_SKIP_MASK);
+      lastFountainHapticStep = -1;
       els.skipCode.textContent = pretty(lastDisplayCode);
+      updateRecoveredFileButton();
     }
     function updateProgress() {
       const have = chunks.size;
@@ -235,6 +241,7 @@
         lastSkipMask = INITIAL_SKIP_MASK;
         lastDisplayCode = encode(INITIAL_SKIP_MASK);
         els.skipCode.textContent = pretty(lastDisplayCode);
+        updateRecoveredFileButton();
         return;
       }
 
@@ -272,6 +279,8 @@
         for (let i = 1; i <= total; i++) out += chunks.get(i) || '';
         els.preview.value = out;
       }
+
+      updateRecoveredFileButton();
     }
 
     // 新旧フォーマット対応のパーサ
@@ -282,6 +291,7 @@
         els.decodeStatus.textContent = '待機中';
         els.missing.textContent = '-';
         els.skipCode.textContent = 'fountain';
+        updateRecoveredFileButton();
         return;
       }
 
@@ -292,6 +302,7 @@
       els.progress.textContent = `${received}/${need}+`;
       els.progressPercent.textContent = `${percent}%`;
       els.skipCode.textContent = 'fountain';
+      applyFountainHaptic(percent, fountainDecoder.complete);
 
       if (fountainDecoder.complete) {
         els.decodeStatus.textContent = '復元完了';
@@ -308,6 +319,31 @@
       if (fountainDecoder.lastError) {
         els.missing.textContent += ` / ${fountainDecoder.lastError}`;
       }
+
+      updateRecoveredFileButton();
+    }
+
+    function applyFountainHaptic(percent, complete) {
+      if (!navigator.vibrate) return;
+
+      const step = complete
+        ? 100
+        : percent >= 90
+          ? percent
+          : Math.floor(percent / 10) * 10;
+      if (step <= 0 || step <= lastFountainHapticStep) return;
+
+      lastFountainHapticStep = step;
+      navigator.vibrate(complete ? [25, 25, 60] : 20);
+    }
+
+    function hasRecoveredArchive() {
+      if (fountainDecoder?.complete && fountainDecoder.recoveredBytes) return true;
+      return total > 0 && chunks.size === total && els.preview.value.trim().length > 0;
+    }
+
+    function updateRecoveredFileButton() {
+      if (els.btnSaveFile) els.btnSaveFile.disabled = !hasRecoveredArchive();
     }
 
     async function ingestFountainPayload(text) {
@@ -319,6 +355,7 @@
         currentSession = frame.sid;
         total = frame.sourceSymbolCount;
         chunks.clear();
+        lastFountainHapticStep = -1;
         els.session.textContent = currentSession;
         els.preview.value = '';
       }
@@ -418,7 +455,106 @@
       try { await html5Qr.applyVideoConstraints({ advanced: [{ torch: ev.target.checked }] }); } catch {}
     });
 
+    function getRecoveredArchiveBytes() {
+      if (fountainDecoder?.complete && fountainDecoder.recoveredBytes) {
+        return fountainDecoder.recoveredBytes;
+      }
+
+      const text = els.preview.value.trim();
+      if (!text) return null;
+      return base64UrlToBytes(text.replace(/\s+/g, ''));
+    }
+
+    async function tryExtractSingleRootFileFromZip(bytes) {
+      if (!looksZip(bytes)) return null;
+
+      const files = unzipSync(bytes);
+      const names = Object.keys(files).filter(name => !name.endsWith('/'));
+      if (names.length !== 1) return null;
+
+      const name = names[0];
+      if (/[\\/]/.test(name)) return null;
+      return {
+        name: sanitizeDownloadName(name),
+        bytes: files[name],
+      };
+    }
+
+    function looksZip(bytes) {
+      return bytes.length >= 4 &&
+        bytes[0] === 0x50 && bytes[1] === 0x4b &&
+        bytes[2] === 0x03 && bytes[3] === 0x04;
+    }
+
+    function looksGzip(bytes) {
+      return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+    }
+
+    function maybeGunzip(bytes) {
+      if (!looksGzip(bytes)) return bytes;
+      try {
+        return gunzipSync(bytes);
+      } catch {
+        return bytes;
+      }
+    }
+
+    function sanitizeDownloadName(name) {
+      const trimmed = name.split(/[\\/]/).pop()?.trim() || 'decoded.bin';
+      const cleaned = trimmed.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+      const stem = cleaned.replace(/\.[^.]*$/, '') || 'decoded';
+      const ext = cleaned.includes('.') ? cleaned.slice(cleaned.lastIndexOf('.')) : '.bin';
+      return `${stem}${ext}`;
+    }
+
+    function mimeForName(name) {
+      const lower = name.toLowerCase();
+      if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+      if (lower.endsWith('.png')) return 'image/png';
+      if (lower.endsWith('.gif')) return 'image/gif';
+      if (lower.endsWith('.webp')) return 'image/webp';
+      if (lower.endsWith('.txt') || lower.endsWith('.log')) return 'text/plain';
+      if (lower.endsWith('.json')) return 'application/json';
+      if (lower.endsWith('.zip')) return 'application/zip';
+      return 'application/octet-stream';
+    }
+
+    function downloadBytes(bytes, fileName, mimeType) {
+      const blob = new Blob([bytes], { type: mimeType });
+      const a = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
     function getResultBlob() { return new Blob([els.preview.value || ''], { type: 'text/plain' }); }
+    document.getElementById('btnSaveFile').addEventListener('click', async () => {
+      try {
+        const recoveredBytes = getRecoveredArchiveBytes();
+        if (!recoveredBytes) {
+          alert('復元済みデータがありません。');
+          return;
+        }
+
+        const archiveBytes = maybeGunzip(recoveredBytes);
+        let extracted = null;
+        try {
+          extracted = await tryExtractSingleRootFileFromZip(archiveBytes);
+        } catch (error) {
+          console.warn(error);
+        }
+
+        if (extracted) {
+          downloadBytes(extracted.bytes, extracted.name, mimeForName(extracted.name));
+        } else {
+          downloadBytes(archiveBytes, `qrlog-${currentSession||'session'}.zip`, 'application/zip');
+        }
+      } catch (error) {
+        alert(`ファイル保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
     document.getElementById('btnSaveTxt').addEventListener('click', () => {
       const blob = getResultBlob(); const a=document.createElement('a'); const url=URL.createObjectURL(blob);
       a.href=url; a.download=`qrlog-${currentSession||'session'}-${new Date().toISOString().replace(/[:.]/g,'-')}.txt`;
