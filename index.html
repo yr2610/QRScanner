@@ -80,7 +80,7 @@
           <div class="row" style="justify-content:flex-end">
             <button id="btnSaveFile" disabled>元ファイル保存</button>
             <button id="btnSaveTxt">.txt として保存</button>
-            <button id="btnShareTxt">共有（Gmail/Drive など）</button>
+            <button id="btnShareTxt" disabled>共有（元ファイル）</button>
           </div>
         </div>
       </div>
@@ -98,7 +98,7 @@
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=7'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=8'); } catch {} }
     })();
 
     // 状態
@@ -118,6 +118,7 @@
       modeSelect: document.getElementById('modeSelect'),
       skipCode: document.getElementById('skipCode'),
       btnSaveFile: document.getElementById('btnSaveFile'),
+      btnShareTxt: document.getElementById('btnShareTxt'),
     };
 
     const BUCKETS = 32;
@@ -131,6 +132,7 @@
     let seenChunks = new Uint8Array(0);
     let fountainDecoder = null;
     let lastFountainHapticStep = -1;
+    let autoSavedRecoveryKey = null;
 
     function applySkipCode(mask, { force = false, vibrate = true } = {}) {
       mask = (mask >>> 0);
@@ -228,6 +230,7 @@
       lastSkipMask = INITIAL_SKIP_MASK;
       lastDisplayCode = encode(INITIAL_SKIP_MASK);
       lastFountainHapticStep = -1;
+      autoSavedRecoveryKey = null;
       els.skipCode.textContent = pretty(lastDisplayCode);
       updateRecoveredFileButton();
     }
@@ -343,7 +346,33 @@
     }
 
     function updateRecoveredFileButton() {
-      if (els.btnSaveFile) els.btnSaveFile.disabled = !hasRecoveredArchive();
+      const ready = hasRecoveredArchive();
+      if (els.btnSaveFile) els.btnSaveFile.disabled = !ready;
+      if (els.btnShareTxt) els.btnShareTxt.disabled = !ready;
+      if (ready) scheduleAutoSaveRecoveredFile();
+    }
+
+    function recoveredArchiveKey() {
+      if (!hasRecoveredArchive()) return '';
+      if (fountainDecoder?.complete) {
+        return `f:${currentSession}:${fountainDecoder.sourceLength}:${fountainDecoder.crc32}`;
+      }
+
+      return `l:${currentSession}:${total}:${els.preview.value.length}`;
+    }
+
+    function scheduleAutoSaveRecoveredFile() {
+      const key = recoveredArchiveKey();
+      if (!key || key === autoSavedRecoveryKey) return;
+
+      autoSavedRecoveryKey = key;
+      setTimeout(async () => {
+        try {
+          await saveRecoveredFile({ silent: true });
+        } catch (error) {
+          console.warn(error);
+        }
+      }, 0);
     }
 
     async function ingestFountainPayload(text) {
@@ -519,6 +548,34 @@
       return 'application/octet-stream';
     }
 
+    async function buildRecoveredFilePayload() {
+      const recoveredBytes = getRecoveredArchiveBytes();
+      if (!recoveredBytes) return null;
+
+      const archiveBytes = maybeGunzip(recoveredBytes);
+      let extracted = null;
+      try {
+        extracted = await tryExtractSingleRootFileFromZip(archiveBytes);
+      } catch (error) {
+        console.warn(error);
+      }
+
+      if (extracted) {
+        return {
+          bytes: extracted.bytes,
+          name: extracted.name,
+          mimeType: mimeForName(extracted.name),
+        };
+      }
+
+      const name = `qrlog-${currentSession||'session'}.zip`;
+      return {
+        bytes: archiveBytes,
+        name,
+        mimeType: 'application/zip',
+      };
+    }
+
     function downloadBytes(bytes, fileName, mimeType) {
       const blob = new Blob([bytes], { type: mimeType });
       const a = document.createElement('a');
@@ -530,43 +587,39 @@
     }
 
     function getResultBlob() { return new Blob([els.preview.value || ''], { type: 'text/plain' }); }
-    document.getElementById('btnSaveFile').addEventListener('click', async () => {
+    async function saveRecoveredFile({ silent = false } = {}) {
       try {
-        const recoveredBytes = getRecoveredArchiveBytes();
-        if (!recoveredBytes) {
-          alert('復元済みデータがありません。');
+        const payload = await buildRecoveredFilePayload();
+        if (!payload) {
+          if (!silent) alert('復元済みデータがありません。');
           return;
         }
 
-        const archiveBytes = maybeGunzip(recoveredBytes);
-        let extracted = null;
-        try {
-          extracted = await tryExtractSingleRootFileFromZip(archiveBytes);
-        } catch (error) {
-          console.warn(error);
-        }
-
-        if (extracted) {
-          downloadBytes(extracted.bytes, extracted.name, mimeForName(extracted.name));
-        } else {
-          downloadBytes(archiveBytes, `qrlog-${currentSession||'session'}.zip`, 'application/zip');
-        }
+        downloadBytes(payload.bytes, payload.name, payload.mimeType);
       } catch (error) {
-        alert(`ファイル保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
+        if (!silent) alert(`ファイル保存に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
+        else throw error;
       }
-    });
+    }
+
+    document.getElementById('btnSaveFile').addEventListener('click', () => saveRecoveredFile());
     document.getElementById('btnSaveTxt').addEventListener('click', () => {
       const blob = getResultBlob(); const a=document.createElement('a'); const url=URL.createObjectURL(blob);
       a.href=url; a.download=`qrlog-${currentSession||'session'}-${new Date().toISOString().replace(/[:.]/g,'-')}.txt`;
       a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
     });
     document.getElementById('btnShareTxt').addEventListener('click', async () => {
-      const file = new File([getResultBlob()], `qrlog-${currentSession||'session'}.txt`, { type:'text/plain' });
+      const payload = await buildRecoveredFilePayload();
+      if (!payload) {
+        alert('復元済みデータがありません。');
+        return;
+      }
+
+      const file = new File([payload.bytes], payload.name, { type: payload.mimeType });
       if (navigator.canShare && navigator.canShare({ files:[file] })) {
-        try { await navigator.share({ files:[file], title:'QR Log', text:'連結ログ' }); } catch {}
+        try { await navigator.share({ files:[file], title:'QR Log', text:'復元ファイル' }); } catch {}
       } else {
-        const a=document.createElement('a'); const url=URL.createObjectURL(file);
-        a.href=url; a.download=file.name; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+        downloadBytes(payload.bytes, payload.name, payload.mimeType);
       }
     });
 

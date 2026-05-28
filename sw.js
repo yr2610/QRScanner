@@ -1,7 +1,7 @@
-const CACHE_NAME = 'qrscanner-v7';
+const CACHE_NAME = 'qrscanner-v8';
 const ASSETS = [
   './',
-  './index.html?v=7',
+  './index.html?v=8',
   './manifest.webmanifest?v=3',
   './fountain.js?v=2',
   './libs/fflate/esm/browser.js',
