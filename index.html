@@ -20,54 +20,13 @@
     button[disabled]{opacity:.5; cursor:not-allowed;}
     button:hover { background:#1f2937; }
     .muted { color:#9ca3af; font-size:12px; }
-    #readerShell {
-      position:relative;
+    #reader { width:75%; max-width:480px; margin:0; aspect-ratio:4/3; }
+    #reader.reader-hidden { display:none; }
+    #completeOverlay {
+      display:none;
       width:75%;
       max-width:480px;
-      height:min(360px, 56.25vw);
-      margin:0;
-      overflow:hidden;
-      background:#0f172a;
-      border:1px solid #1f2937;
-      border-radius:12px;
-    }
-    #reader {
-      width:100%;
-      height:100%;
-      margin:0;
-      padding:0;
-      border:0;
-      border-radius:0;
-      box-sizing:border-box;
-      overflow:hidden;
-      background:#0f172a;
-    }
-    #reader > div,
-    #reader__scan_region {
-      width:100% !important;
-      height:100% !important;
-      min-height:0 !important;
-      border:0 !important;
-    }
-    #reader video {
-      width:100% !important;
-      height:100% !important;
-      object-fit:cover;
-    }
-    #reader img,
-    #reader canvas {
-      max-width:100% !important;
-      max-height:100% !important;
-    }
-    #reader__dashboard,
-    #reader__dashboard_section,
-    #reader__status_span {
-      display:none !important;
-    }
-    #completeOverlay {
-      position:absolute;
-      inset:0;
-      display:none;
+      aspect-ratio:4/3;
       place-items:center;
       text-align:center;
       background:#07111f;
@@ -108,13 +67,11 @@
         </label>
         <span class="muted">※ HTTPS/localhost でのみカメラ使用可</span>
       </div>
-      <div id="readerShell">
-        <div id="reader" class="card"></div>
-        <div id="completeOverlay" aria-live="polite">
-          <div>
-            <div class="complete-title">復元完了</div>
-            <div class="complete-subtitle">元ファイルを保存します</div>
-          </div>
+      <div id="reader" class="card"></div>
+      <div id="completeOverlay" aria-live="polite">
+        <div>
+          <div class="complete-title">復元完了</div>
+          <div class="complete-subtitle">元ファイルを保存します</div>
         </div>
       </div>
       <div class="row">
@@ -164,7 +121,7 @@
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=10'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=11'); } catch {} }
     })();
 
     // 状態
@@ -185,6 +142,7 @@
       skipCode: document.getElementById('skipCode'),
       btnSaveFile: document.getElementById('btnSaveFile'),
       btnShareTxt: document.getElementById('btnShareTxt'),
+      reader: document.getElementById('reader'),
       completeOverlay: document.getElementById('completeOverlay'),
     };
 
@@ -399,6 +357,7 @@
     function setCompletionOverlay(show) {
       if (!els.completeOverlay) return;
       els.completeOverlay.classList.toggle('show', Boolean(show));
+      if (els.reader) els.reader.classList.toggle('reader-hidden', Boolean(show));
     }
 
     function applyFountainHaptic(percent, complete) {
