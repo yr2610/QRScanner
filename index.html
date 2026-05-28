@@ -38,6 +38,7 @@
     #completeOverlay.show { display:grid; }
     .complete-title { font-size:clamp(30px, 7vw, 56px); font-weight:800; line-height:1.05; color:#f8fafc; }
     .complete-subtitle { margin-top:12px; font-size:14px; color:#93c5fd; }
+    .complete-metrics { margin-top:8px; font-size:13px; color:#dbeafe; }
     #missing { display:block; max-width:100%; white-space:normal; overflow:hidden; line-height:1.4; max-height:2.8em; }
     textarea { width:100%; height:200px; resize:vertical; background:#0b1020; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:8px; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
@@ -72,6 +73,7 @@
         <div>
           <div class="complete-title">復元完了</div>
           <div class="complete-subtitle">ファイルを保存します</div>
+          <div class="complete-metrics" id="completeMetrics"></div>
         </div>
       </div>
       <div class="row">
@@ -89,6 +91,7 @@
             <div>受信: <span id="progress">0/0</span></div>
             <div>進捗: <span id="progressPercent">0%</span></div>
             <div>状態: <span id="decodeStatus">待機中</span></div>
+            <div>計測: <span id="transferMetrics">-</span></div>
             <div>不足: <span id="missing">-</span></div>
           </div>
           <div class="skipcode-row">
@@ -121,7 +124,7 @@
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=13'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=14'); } catch {} }
     })();
 
     // 状態
@@ -132,6 +135,7 @@
       progress: document.getElementById('progress'),
       progressPercent: document.getElementById('progressPercent'),
       decodeStatus: document.getElementById('decodeStatus'),
+      transferMetrics: document.getElementById('transferMetrics'),
       missing: document.getElementById('missing'),
       preview: document.getElementById('preview'),
       cameraSelect: document.getElementById('cameraSelect'),
@@ -144,6 +148,7 @@
       btnShareTxt: document.getElementById('btnShareTxt'),
       reader: document.getElementById('reader'),
       completeOverlay: document.getElementById('completeOverlay'),
+      completeMetrics: document.getElementById('completeMetrics'),
     };
 
     const BUCKETS = 32;
@@ -158,6 +163,90 @@
     let fountainDecoder = null;
     let lastFountainHapticStep = -1;
     let autoSavedRecoveryKey = null;
+    let transferStartedAt = 0;
+    let transferCompletedAt = 0;
+    let transferByteLength = 0;
+    let transferModeName = '';
+
+    function nowMs() {
+      return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+    }
+
+    function formatDuration(ms) {
+      const seconds = Math.max(0, ms / 1000);
+      if (seconds < 60) return `${seconds.toFixed(1)}秒`;
+
+      const minutes = Math.floor(seconds / 60);
+      const remainder = seconds - (minutes * 60);
+      return `${minutes}分${remainder.toFixed(1).padStart(4, '0')}秒`;
+    }
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let value = bytes;
+      let unit = 0;
+      while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit++;
+      }
+
+      const digits = value >= 100 || unit === 0 ? 0 : 1;
+      return `${value.toFixed(digits)} ${units[unit]}`;
+    }
+
+    function formatRate(bytes, ms) {
+      if (!Number.isFinite(bytes) || bytes <= 0 || !Number.isFinite(ms) || ms <= 0) return '-';
+      return `${formatBytes(bytes / (ms / 1000))}/秒`;
+    }
+
+    function resetTransferMetrics() {
+      transferStartedAt = 0;
+      transferCompletedAt = 0;
+      transferByteLength = 0;
+      transferModeName = '';
+      renderTransferMetrics();
+    }
+
+    function startTransferTimer(modeName) {
+      if (transferStartedAt) return;
+      transferStartedAt = nowMs();
+      transferModeName = modeName;
+      renderTransferMetrics();
+    }
+
+    function finishTransferTimer(byteLength) {
+      if (!transferStartedAt) return;
+      if (!transferCompletedAt) {
+        transferCompletedAt = nowMs();
+        transferByteLength = Math.max(0, byteLength || 0);
+      }
+      renderTransferMetrics();
+    }
+
+    function transferMetricsText() {
+      if (!transferStartedAt) return '-';
+
+      const elapsedMs = (transferCompletedAt || nowMs()) - transferStartedAt;
+      const parts = [];
+      if (transferModeName) parts.push(transferModeName);
+      parts.push(formatDuration(elapsedMs));
+
+      if (transferCompletedAt) {
+        parts.push(formatBytes(transferByteLength));
+        parts.push(formatRate(transferByteLength, elapsedMs));
+      } else {
+        parts.push('計測中');
+      }
+
+      return parts.join(' / ');
+    }
+
+    function renderTransferMetrics() {
+      const text = transferMetricsText();
+      if (els.transferMetrics) els.transferMetrics.textContent = text;
+      if (els.completeMetrics) els.completeMetrics.textContent = transferCompletedAt ? text : '';
+    }
 
     function applySkipCode(mask, { force = false, vibrate = true } = {}) {
       mask = (mask >>> 0);
@@ -258,6 +347,7 @@
       autoSavedRecoveryKey = null;
       els.skipCode.textContent = pretty(lastDisplayCode);
       setCompletionOverlay(false);
+      resetTransferMetrics();
       updateRecoveredFileButton();
     }
     function updateProgress() {
@@ -270,6 +360,7 @@
         lastSkipMask = INITIAL_SKIP_MASK;
         lastDisplayCode = encode(INITIAL_SKIP_MASK);
         els.skipCode.textContent = pretty(lastDisplayCode);
+        renderTransferMetrics();
         updateRecoveredFileButton();
         return;
       }
@@ -307,6 +398,10 @@
         let out = '';
         for (let i = 1; i <= total; i++) out += chunks.get(i) || '';
         els.preview.value = out;
+        const recoveredBytes = getRecoveredArchiveBytes();
+        finishTransferTimer(recoveredBytes ? recoveredBytes.length : out.length);
+      } else {
+        renderTransferMetrics();
       }
 
       setCompletionOverlay(have === total);
@@ -321,6 +416,7 @@
         els.decodeStatus.textContent = '待機中';
         els.missing.textContent = '-';
         els.skipCode.textContent = 'fountain';
+        renderTransferMetrics();
         updateRecoveredFileButton();
         return;
       }
@@ -338,12 +434,15 @@
         els.decodeStatus.textContent = '復元完了';
         els.missing.textContent = `受信 ${received} / 重複 ${fountainDecoder.duplicates}`;
         els.preview.value = bytesToBase64Url(fountainDecoder.recoveredBytes);
+        finishTransferTimer(fountainDecoder.recoveredBytes.length);
       } else if (received >= need) {
         els.decodeStatus.textContent = '復元待ち';
         els.missing.textContent = `受信 ${received} / 追加読み取り中 / 重複 ${fountainDecoder.duplicates}`;
+        renderTransferMetrics();
       } else {
         els.decodeStatus.textContent = 'Wirehair受信中';
         els.missing.textContent = `目安あと ${need - received} / 受信 ${received} / 重複 ${fountainDecoder.duplicates}`;
+        renderTransferMetrics();
       }
 
       if (fountainDecoder.lastError) {
@@ -356,6 +455,7 @@
 
     function setCompletionOverlay(show) {
       if (!els.completeOverlay) return;
+      renderTransferMetrics();
       els.completeOverlay.classList.toggle('show', Boolean(show));
       if (els.reader) els.reader.classList.toggle('reader-hidden', Boolean(show));
     }
@@ -414,6 +514,7 @@
       if (!frame) return;
 
       if (!fountainDecoder) {
+        startTransferTimer('Fountain');
         fountainDecoder = await FountainDecoder.create(frame);
         currentSession = frame.sid;
         total = frame.sourceSymbolCount;
@@ -448,6 +549,7 @@
       }
       if (!(Number.isInteger(idx) && Number.isInteger(tot) && idx>=1 && tot>=1 && idx<=tot)) return;
       if (!currentSession) {
+        startTransferTimer('Legacy');
         currentSession = ses;
         total = tot;
         els.session.textContent = currentSession;
