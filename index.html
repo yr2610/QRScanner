@@ -127,6 +127,7 @@
     let bucketCounts = new Uint16Array(BUCKETS);
     let seenChunks = new Uint8Array(0);
     let fountainDecoder = null;
+    let lastFountainHapticStep = -1;
 
     function applySkipCode(mask, { force = false, vibrate = true } = {}) {
       mask = (mask >>> 0);
@@ -223,6 +224,7 @@
       seenChunks = new Uint8Array(0);
       lastSkipMask = INITIAL_SKIP_MASK;
       lastDisplayCode = encode(INITIAL_SKIP_MASK);
+      lastFountainHapticStep = -1;
       els.skipCode.textContent = pretty(lastDisplayCode);
     }
     function updateProgress() {
@@ -292,6 +294,7 @@
       els.progress.textContent = `${received}/${need}+`;
       els.progressPercent.textContent = `${percent}%`;
       els.skipCode.textContent = 'fountain';
+      applyFountainHaptic(percent, fountainDecoder.complete);
 
       if (fountainDecoder.complete) {
         els.decodeStatus.textContent = '復元完了';
@@ -310,6 +313,20 @@
       }
     }
 
+    function applyFountainHaptic(percent, complete) {
+      if (!navigator.vibrate) return;
+
+      const step = complete
+        ? 100
+        : percent >= 90
+          ? percent
+          : Math.floor(percent / 10) * 10;
+      if (step <= 0 || step <= lastFountainHapticStep) return;
+
+      lastFountainHapticStep = step;
+      navigator.vibrate(complete ? [25, 25, 60] : 20);
+    }
+
     async function ingestFountainPayload(text) {
       const frame = parseFountainFrame(text);
       if (!frame) return;
@@ -319,6 +336,7 @@
         currentSession = frame.sid;
         total = frame.sourceSymbolCount;
         chunks.clear();
+        lastFountainHapticStep = -1;
         els.session.textContent = currentSession;
         els.preview.value = '';
       }
