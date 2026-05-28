@@ -42,6 +42,12 @@
         <button id="btnStart" disabled>読み取り開始</button>
         <button id="btnStop" disabled>停止</button>
         <button id="btnReset">セッション初期化</button>
+        <label>Mode:
+          <select id="modeSelect">
+            <option value="fountain" selected>Fountain</option>
+            <option value="legacy">Legacy Q4</option>
+          </select>
+        </label>
         <span class="muted">※ HTTPS/localhost でのみカメラ使用可</span>
       </div>
       <div id="reader" class="card"></div>
@@ -59,6 +65,7 @@
             <div>セッション: <code id="sessionId">(未検出)</code></div>
             <div>受信: <span id="progress">0/0</span></div>
             <div>進捗: <span id="progressPercent">0%</span></div>
+            <div>状態: <span id="decodeStatus">待機中</span></div>
             <div>不足: <span id="missing">-</span></div>
           </div>
           <div class="skipcode-row">
@@ -83,12 +90,13 @@
   <script src="./libs/html5-qrcode.min.js?v=3"></script>
   <script type="module">
     import { bucketRange, encode, pretty } from './skipcode32.js?v=2';
+    import { FountainDecoder, bytesToBase64Url, parseFountainFrame } from './fountain.js?v=1';
 
     // PWA登録（失敗しても無視）
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=3'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=4'); } catch {} }
     })();
 
     // 状態
@@ -98,12 +106,14 @@
       session: document.getElementById('sessionId'),
       progress: document.getElementById('progress'),
       progressPercent: document.getElementById('progressPercent'),
+      decodeStatus: document.getElementById('decodeStatus'),
       missing: document.getElementById('missing'),
       preview: document.getElementById('preview'),
       cameraSelect: document.getElementById('cameraSelect'),
       chkTorch: document.getElementById('chkTorch'),
       btnStart: document.getElementById('btnStart'),
       btnStop: document.getElementById('btnStop'),
+      modeSelect: document.getElementById('modeSelect'),
       skipCode: document.getElementById('skipCode'),
     };
 
@@ -116,6 +126,7 @@
     let bucketSizes = new Uint16Array(BUCKETS);
     let bucketCounts = new Uint16Array(BUCKETS);
     let seenChunks = new Uint8Array(0);
+    let fountainDecoder = null;
 
     function applySkipCode(mask, { force = false, vibrate = true } = {}) {
       mask = (mask >>> 0);
@@ -201,8 +212,10 @@
       els.session.textContent = '(未検出)';
       els.progress.textContent = '0/0';
       els.progressPercent.textContent = '0%';
+      els.decodeStatus.textContent = '待機中';
       els.missing.textContent = '-';
       els.preview.value = '';
+      fountainDecoder = null;
       bucketSetupTotal = 0;
       bucketSizes = new Uint16Array(BUCKETS);
       bucketCounts = new Uint16Array(BUCKETS);
@@ -216,6 +229,7 @@
       els.progress.textContent = `${have}/${total}`;
       if (!total) {
         els.progressPercent.textContent = '0%';
+        els.decodeStatus.textContent = '待機中';
         els.missing.textContent = '-';
         lastSkipMask = INITIAL_SKIP_MASK;
         lastDisplayCode = encode(INITIAL_SKIP_MASK);
@@ -225,6 +239,7 @@
 
       const percent = ((have / total) * 100).toFixed(0);
       els.progressPercent.textContent = `${percent}%`;
+      els.decodeStatus.textContent = have === total ? '完了' : 'Legacy Q4';
 
       const maxDisplay = 20;
       const missShown = [];
@@ -259,7 +274,56 @@
     }
 
     // 新旧フォーマット対応のパーサ
-    function ingestPayload(text) {
+    function updateFountainProgress() {
+      if (!fountainDecoder) {
+        els.progress.textContent = '0/0';
+        els.progressPercent.textContent = '0%';
+        els.decodeStatus.textContent = '待機中';
+        els.missing.textContent = '-';
+        els.skipCode.textContent = 'fountain';
+        return;
+      }
+
+      const rank = fountainDecoder.rank;
+      const need = fountainDecoder.sourceSymbolCount;
+      const received = fountainDecoder.received;
+      const percent = Math.min(100, Math.floor((rank / need) * 100));
+      els.progress.textContent = `${rank}/${need}`;
+      els.progressPercent.textContent = `${percent}%`;
+      els.skipCode.textContent = 'fountain';
+
+      if (fountainDecoder.complete) {
+        els.decodeStatus.textContent = '復元完了';
+        els.missing.textContent = `受信 ${received} / 重複 ${fountainDecoder.duplicates}`;
+        els.preview.value = bytesToBase64Url(fountainDecoder.recoveredBytes);
+      } else if (rank >= need) {
+        els.decodeStatus.textContent = '復元試行中';
+        els.missing.textContent = `受信 ${received} / 追加読み取り中`;
+      } else {
+        els.decodeStatus.textContent = 'Fountain受信中';
+        els.missing.textContent = `あと ${need - rank} / 受信 ${received} / 重複 ${fountainDecoder.duplicates}`;
+      }
+    }
+
+    function ingestFountainPayload(text) {
+      const frame = parseFountainFrame(text);
+      if (!frame) return;
+
+      if (!fountainDecoder) {
+        fountainDecoder = new FountainDecoder(frame);
+        currentSession = frame.sid;
+        total = frame.sourceSymbolCount;
+        chunks.clear();
+        els.session.textContent = currentSession;
+        els.preview.value = '';
+      }
+
+      if (frame.sid !== currentSession) return;
+      fountainDecoder.accept(frame);
+      updateFountainProgress();
+    }
+
+    function ingestLegacyPayload(text) {
       // 新: Q4|<idxHex>/<totHex>|<sid>|<payload>
       let m = text.match(/^Q4\|([0-9A-F]{1,4})\/([0-9A-F]{1,4})\|([0-9A-Z]{3,4})\|(.*)$/i);
       let idx, tot, ses, payload;
@@ -293,6 +357,14 @@
     }
 
     // カメラ
+    function ingestPayload(text) {
+      if (els.modeSelect.value === 'fountain') {
+        ingestFountainPayload(text);
+      } else {
+        ingestLegacyPayload(text);
+      }
+    }
+
     const html5Qr = new window.Html5Qrcode('reader');
     let running = false;
     async function listCameras() {
@@ -346,10 +418,18 @@
       }
     });
 
-    (async () => { resetSession(); await listCameras(); updateProgress(); })();
+    (async () => {
+      resetSession();
+      await listCameras();
+      if (els.modeSelect.value === 'fountain') updateFountainProgress(); else updateProgress();
+    })();
     document.getElementById('btnStart').addEventListener('click', start);
     document.getElementById('btnStop').addEventListener('click', stop);
     document.getElementById('btnReset').addEventListener('click', resetSession);
+    els.modeSelect.addEventListener('change', () => {
+      resetSession();
+      if (els.modeSelect.value === 'fountain') updateFountainProgress(); else updateProgress();
+    });
   </script>
 </body>
 </html>
