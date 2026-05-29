@@ -124,7 +124,7 @@
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=14'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=15'); } catch {} }
     })();
 
     // 状態
@@ -167,6 +167,7 @@
     let transferCompletedAt = 0;
     let transferByteLength = 0;
     let transferModeName = '';
+    let transferMetricsTimerId = 0;
 
     function nowMs() {
       return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
@@ -201,6 +202,7 @@
     }
 
     function resetTransferMetrics() {
+      stopTransferMetricsTimer();
       transferStartedAt = 0;
       transferCompletedAt = 0;
       transferByteLength = 0;
@@ -212,6 +214,7 @@
       if (transferStartedAt) return;
       transferStartedAt = nowMs();
       transferModeName = modeName;
+      startTransferMetricsTimer();
       renderTransferMetrics();
     }
 
@@ -220,24 +223,65 @@
       if (!transferCompletedAt) {
         transferCompletedAt = nowMs();
         transferByteLength = Math.max(0, byteLength || 0);
+        stopTransferMetricsTimer();
       }
       renderTransferMetrics();
+    }
+
+    function startTransferMetricsTimer() {
+      if (transferMetricsTimerId) return;
+      transferMetricsTimerId = window.setInterval(renderTransferMetrics, 500);
+    }
+
+    function stopTransferMetricsTimer() {
+      if (!transferMetricsTimerId) return;
+      window.clearInterval(transferMetricsTimerId);
+      transferMetricsTimerId = 0;
+    }
+
+    function base64UrlByteEstimate(text) {
+      const clean = (text || '').replace(/\s+/g, '');
+      return base64UrlByteEstimateFromLength(clean.length);
+    }
+
+    function base64UrlByteEstimateFromLength(length) {
+      if (!Number.isFinite(length) || length <= 0) return 0;
+      return Math.max(0, Math.floor((length * 3) / 4));
+    }
+
+    function legacyReceivedByteEstimate() {
+      let chars = 0;
+      for (const payload of chunks.values()) {
+        chars += (payload || '').length;
+      }
+
+      return base64UrlByteEstimateFromLength(chars);
+    }
+
+    function currentTransferByteEstimate() {
+      if (transferCompletedAt) return transferByteLength;
+
+      if (fountainDecoder) {
+        const need = Math.max(1, fountainDecoder.sourceSymbolCount || 1);
+        const received = Math.min(fountainDecoder.received || 0, need);
+        const sourceLength = Math.max(0, fountainDecoder.sourceLength || 0);
+        return Math.min(sourceLength, Math.floor((sourceLength * received) / need));
+      }
+
+      if (total > 0) return legacyReceivedByteEstimate();
+      return transferByteLength;
     }
 
     function transferMetricsText() {
       if (!transferStartedAt) return '-';
 
       const elapsedMs = (transferCompletedAt || nowMs()) - transferStartedAt;
+      const byteLength = currentTransferByteEstimate();
       const parts = [];
       if (transferModeName) parts.push(transferModeName);
       parts.push(formatDuration(elapsedMs));
-
-      if (transferCompletedAt) {
-        parts.push(formatBytes(transferByteLength));
-        parts.push(formatRate(transferByteLength, elapsedMs));
-      } else {
-        parts.push('計測中');
-      }
+      parts.push(transferCompletedAt ? formatBytes(byteLength) : `${formatBytes(byteLength)}目安`);
+      parts.push(formatRate(byteLength, elapsedMs));
 
       return parts.join(' / ');
     }
