@@ -66,7 +66,7 @@
             <option value="legacy">Legacy Q4</option>
           </select>
         </label>
-        <label><input type="checkbox" id="chkDualQr"/> Dual QR（Android Chrome）</label>
+        <label><input type="checkbox" id="chkDualQr" checked/> Dual QR（Android Chrome）</label>
         <span class="muted" id="dualQrStatus"></span>
         <span class="muted">※ HTTPS/localhost でのみカメラ使用可</span>
       </div>
@@ -126,7 +126,7 @@
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=16'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=17'); } catch {} }
     })();
 
     // 状態
@@ -646,6 +646,7 @@
     async function initializeDualQrDetector() {
       if (!('BarcodeDetector' in window)) {
         dualQrSupported = false;
+        els.chkDualQr.checked = false;
         els.chkDualQr.disabled = true;
         setDualQrStatus('Dual QR非対応');
         return;
@@ -665,6 +666,7 @@
       } catch (error) {
         console.warn(error);
         dualQrSupported = false;
+        els.chkDualQr.checked = false;
         els.chkDualQr.disabled = true;
         setDualQrStatus('Dual QR非対応');
       }
