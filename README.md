@@ -71,15 +71,23 @@ QRScanner はブラウザ/PWAアプリです。Android などのカメラで Q4S
 
 すべての断片が必要です。SkipCode32 は Legacy Q4 の不足範囲確認用です。Fountain では基本的に使いません。
 
-## Dual QR 実験モード
+## Dual QR
 
-Fountain では、Q4Sender と QRScanner の両方で `Dual QR` を有効にすると、異なる2枚の QR コードを上下に同時表示して読み取れます。
+Fountain では、Q4Sender と QRScanner の両方で `Dual QR` が既定で有効です。異なる2枚の QR コードを上下に同時表示して読み取ります。
 
 Q4Sender は現在のフレームと半周先のフレームを上下に表示します。QR コードは縦方向に潰さず、どちらも正方形のまま描画します。
 
 QRScanner は Android Chrome の `BarcodeDetector` を補助経路として使い、カメラ映像内の複数 QR コードを読み取ります。対応していないブラウザでは `Dual QR非対応` と表示され、従来の単一 QR 読み取りはそのまま利用できます。
 
-Dual QR は実験機能です。端末性能、カメラ解像度、距離によっては単一 QR より認識率が落ちる場合があります。画面に2枚を無理なく収め、速度表示を見ながら比較してください。
+端末性能、カメラ解像度、距離によっては単一 QR より認識率が落ちる場合があります。その場合は Q4Sender と QRScanner の両方で `Dual QR` を無効にしてください。
+
+実機調整では、次の Q4Sender 設定が速度と認識率のバランスが良好でした。
+
+```yaml
+timerInterval: 75
+qrSettings:
+  version: 25
+```
 
 ## 保存と共有のルール
 
