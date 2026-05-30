@@ -66,6 +66,8 @@
             <option value="legacy">Legacy Q4</option>
           </select>
         </label>
+        <label><input type="checkbox" id="chkDualQr"/> Dual QR（Android Chrome）</label>
+        <span class="muted" id="dualQrStatus"></span>
         <span class="muted">※ HTTPS/localhost でのみカメラ使用可</span>
       </div>
       <div id="reader" class="card"></div>
@@ -124,7 +126,7 @@
     (async () => {
       if (window.matchMedia('(display-mode: standalone)').matches)
         document.getElementById('pwaStatus').textContent = 'PWA ✓';
-      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=15'); } catch {} }
+      if ('serviceWorker' in navigator) { try { await navigator.serviceWorker.register('./sw.js?v=16'); } catch {} }
     })();
 
     // 状態
@@ -140,6 +142,8 @@
       preview: document.getElementById('preview'),
       cameraSelect: document.getElementById('cameraSelect'),
       chkTorch: document.getElementById('chkTorch'),
+      chkDualQr: document.getElementById('chkDualQr'),
+      dualQrStatus: document.getElementById('dualQrStatus'),
       btnStart: document.getElementById('btnStart'),
       btnStop: document.getElementById('btnStop'),
       modeSelect: document.getElementById('modeSelect'),
@@ -502,6 +506,7 @@
       renderTransferMetrics();
       els.completeOverlay.classList.toggle('show', Boolean(show));
       if (els.reader) els.reader.classList.toggle('reader-hidden', Boolean(show));
+      if (show) stopDualQrScan(); else startDualQrScan();
     }
 
     function applyFountainHaptic(percent, complete) {
@@ -629,6 +634,93 @@
 
     const html5Qr = new window.Html5Qrcode('reader');
     let running = false;
+    let dualQrDetector = null;
+    let dualQrScanTimerId = 0;
+    let dualQrScanBusy = false;
+    let dualQrSupported = false;
+
+    function setDualQrStatus(text) {
+      if (els.dualQrStatus) els.dualQrStatus.textContent = text;
+    }
+
+    async function initializeDualQrDetector() {
+      if (!('BarcodeDetector' in window)) {
+        dualQrSupported = false;
+        els.chkDualQr.disabled = true;
+        setDualQrStatus('Dual QR非対応');
+        return;
+      }
+
+      try {
+        if (typeof window.BarcodeDetector.getSupportedFormats === 'function') {
+          const formats = await window.BarcodeDetector.getSupportedFormats();
+          if (!formats.includes('qr_code')) {
+            throw new Error('qr_code is not supported');
+          }
+        }
+
+        dualQrDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+        dualQrSupported = true;
+        updateDualQrControlState();
+      } catch (error) {
+        console.warn(error);
+        dualQrSupported = false;
+        els.chkDualQr.disabled = true;
+        setDualQrStatus('Dual QR非対応');
+      }
+    }
+
+    function updateDualQrControlState() {
+      if (!els.chkDualQr) return;
+      const fountainMode = els.modeSelect.value === 'fountain';
+      els.chkDualQr.disabled = !dualQrSupported || !fountainMode;
+      if (!fountainMode) {
+        els.chkDualQr.checked = false;
+        stopDualQrScan();
+        setDualQrStatus('');
+      } else if (dualQrSupported) {
+        setDualQrStatus(els.chkDualQr.checked ? '複数QR検出中' : '利用可能');
+      } else {
+        setDualQrStatus('Dual QR非対応');
+      }
+    }
+
+    function startDualQrScan() {
+      if (!running || els.modeSelect.value !== 'fountain' || !dualQrSupported || !dualQrDetector || !els.chkDualQr.checked || dualQrScanTimerId) return;
+      setDualQrStatus('複数QR検出中');
+      dualQrScanTimerId = window.setInterval(scanDualQrFrame, 75);
+      void scanDualQrFrame();
+    }
+
+    function stopDualQrScan() {
+      if (dualQrScanTimerId) {
+        window.clearInterval(dualQrScanTimerId);
+        dualQrScanTimerId = 0;
+      }
+      if (dualQrSupported && els.modeSelect.value === 'fountain') {
+        setDualQrStatus(els.chkDualQr.checked ? '待機中' : '利用可能');
+      }
+    }
+
+    async function scanDualQrFrame() {
+      if (dualQrScanBusy || !running || !dualQrDetector || !els.chkDualQr.checked) return;
+      const video = els.reader.querySelector('video');
+      if (!video || video.readyState < 2) return;
+
+      dualQrScanBusy = true;
+      try {
+        const barcodes = await dualQrDetector.detect(video);
+        for (const barcode of barcodes) {
+          if (barcode.rawValue) ingestPayload(barcode.rawValue);
+        }
+      } catch (error) {
+        console.warn(error);
+        setDualQrStatus('複数QR検出エラー');
+      } finally {
+        dualQrScanBusy = false;
+      }
+    }
+
     async function listCameras() {
       try {
         const devices = await window.Html5Qrcode.getCameras();
@@ -653,15 +745,21 @@
         ()=>{}
       );
       running = true; els.btnStart.disabled = true; els.btnStop.disabled = false;
+      startDualQrScan();
     }
     async function stop() {
       if (!running) return;
+      stopDualQrScan();
       await html5Qr.stop();
       running = false; els.btnStart.disabled = false; els.btnStop.disabled = true;
     }
 
     els.chkTorch.addEventListener('change', async (ev) => {
       try { await html5Qr.applyVideoConstraints({ advanced: [{ torch: ev.target.checked }] }); } catch {}
+    });
+    els.chkDualQr.addEventListener('change', () => {
+      if (els.chkDualQr.checked) startDualQrScan(); else stopDualQrScan();
+      updateDualQrControlState();
     });
 
     function getRecoveredArchiveBytes() {
@@ -849,6 +947,7 @@
 
     (async () => {
       resetSession();
+      await initializeDualQrDetector();
       await listCameras();
       if (els.modeSelect.value === 'fountain') updateFountainProgress(); else updateProgress();
     })();
@@ -857,6 +956,7 @@
     document.getElementById('btnReset').addEventListener('click', resetSession);
     els.modeSelect.addEventListener('change', () => {
       resetSession();
+      updateDualQrControlState();
       if (els.modeSelect.value === 'fountain') updateFountainProgress(); else updateProgress();
     });
   </script>
